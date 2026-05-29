@@ -34,78 +34,46 @@ LiteLLM abstracts all LLM calls — swap providers (OpenAI, Anthropic, Ollama, e
 
 The `full_sdlc` task type runs the complete OpenShift feature development workflow. Phases execute sequentially; human approval gates pause the workflow until a human acts.
 
-```
-  Jira epic URL or key
-           │
-           ▼
-┌─────────────────────────────────────────────────────┐
-│  Phase A · EnsureEpicWorkflow          [jira-agent] │
-│  Fetch existing epic or create a new one            │
-└─────────────────────┬───────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│  Phase B · OpenShiftFeatureWorkflow [openshift-agent]│
-│  Identify affected repos, produce implementation    │
-│  plan, determine CI requirements                    │
-└─────────────────────┬───────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│  Phase C · EnhancementWorkflow   [enhancement-agent]│
-│  Generate OpenShift enhancement doc (LLM)           │
-│  Fork enhancements repo → commit doc → open PR      │
-│  Create design-doc-review story in Jira             │
-└─────────────────────┬───────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│ ⏸ Phase D · WaitForEnhancementApproval  [HUMAN GATE]│
-│  Poll PR every 5 min until:                         │
-│    approved → continue to Phase E                   │
-│    closed   → mark story "Won't Do" and exit        │
-└─────────────────────┬───────────────────────────────┘
-                      │ approved
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│  Phase E · StoryRefinementWorkflow     [jira-agent] │
-│  LLM proposes sized & prioritized stories           │
-│  Post proposals as Jira comment                     │
-│                                                     │
-│ ⏸ [HUMAN GATE] Poll epic comments every 5 min       │
-│    new comments → LLM refines plan → re-post        │
-│    "stories approved" comment → continue            │
-└─────────────────────┬───────────────────────────────┘
-                      │ stories approved
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│  Phase F · CreateStoriesWorkflow       [jira-agent] │
-│  Create stories in Jira                             │
-│  Set story points, priority, dependency links       │
-└─────────────────────┬───────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────┐
-│  Phase G · SetupStagingReposWorkflow  [github-agent]│
-│  For each affected repo (concurrently):             │
-│    Fork to staging org (sync main if fork exists)   │
-│    Create feature branch                            │
-│    Open draft PR  →  add "agent-hold" label         │
-└─────────────────────┬───────────────────────────────┘
-                      │
-                      ▼ (one child workflow per repo, fire-and-forget)
-┌─────────────────────────────────────────────────────┐
-│  Phase H · MonitorPRWorkflow ×N       [github-agent]│
-│  Poll PR every 5 min (runs up to 90 days)           │
-│                                                     │
-│ ⏸ [HUMAN GATE] agent-hold label dropped?            │
-│    yes → LLM processes review comments              │
-│          post response → re-add agent-hold          │
-│    PR closed/merged → monitor exits                 │
-└─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    START([Jira epic URL or key]) --> A
+
+    A["**Phase A** · EnsureEpicWorkflow\n─────────────────────────\njira-agent\nFetch existing epic or create a new one"]
+
+    A --> B["**Phase B** · OpenShiftFeatureWorkflow\n─────────────────────────\nopenshift-agent\nIdentify affected repos\nProduce implementation plan\nDetermine CI requirements"]
+
+    B --> C["**Phase C** · EnhancementWorkflow\n─────────────────────────\nenhancement-agent\nGenerate enhancement doc via LLM\nFork enhancements repo → commit → open PR\nCreate design-doc-review story in Jira"]
+
+    C --> D{{"⏸ **Phase D** · Human Gate\n─────────────────────────\nWaitForEnhancementApprovalWorkflow\nPoll PR every 5 min"}}
+
+    D -- approved --> E
+    D -- closed --> ABORT([Mark story Won't Do · exit])
+
+    E["**Phase E** · StoryRefinementWorkflow\n─────────────────────────\njira-agent\nLLM proposes sized & prioritized stories\nPost proposals as Jira comment"]
+
+    E --> EG{{"⏸ **Phase E** · Human Gate\n─────────────────────────\nPoll epic comments every 5 min\nnew comments → LLM refines → re-post"}}
+
+    EG -- stories approved --> F
+    EG -- feedback --> E
+
+    F["**Phase F** · CreateStoriesWorkflow\n─────────────────────────\njira-agent\nCreate stories in Jira\nSet story points, priority, dependency links"]
+
+    F --> G["**Phase G** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nFork to staging org — sync main if exists\nCreate feature branch\nOpen draft PR → add agent-hold label"]
+
+    G --> H{{"⏸ **Phase H** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
+
+    H -- agent-hold dropped --> HC["LLM processes review comments\nPost response → re-add agent-hold"]
+    HC --> H
+    H -- PR merged/closed --> DONE([Done])
+
+    style D fill:#fff3cd,stroke:#856404,color:#000
+    style EG fill:#fff3cd,stroke:#856404,color:#000
+    style H fill:#fff3cd,stroke:#856404,color:#000
+    style ABORT fill:#f8d7da,stroke:#842029,color:#000
+    style DONE fill:#d1e7dd,stroke:#0f5132,color:#000
 ```
 
-Human approval gates (`⏸`) are implemented as Temporal `wait_condition` polling loops — workers are never blocked; the workflow sleeps between polls and resumes durably across restarts.
+Human approval gates (yellow diamonds) are implemented as Temporal polling loops — workers are never blocked; the workflow sleeps between polls and resumes durably across restarts.
 
 ## Two environments
 
