@@ -1,0 +1,26 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: sdlc
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Temporal gRPC — used by workers and trigger script
+      - containerPort: 7233
+        hostPort: 7233
+        protocol: TCP
+      # Temporal Web UI
+      - containerPort: 8233
+        hostPort: 8233
+        protocol: TCP
+      # MinIO API
+      - containerPort: 9000
+        hostPort: 9000
+        protocol: TCP
+      # MinIO console
+      - containerPort: 9001
+        hostPort: 9001
+        protocol: TCP
+      # Ollama API — allows hitting the in-cluster model from the host
+      - containerPort: 11434
+        hostPort: 11434
+        protocol: TCP

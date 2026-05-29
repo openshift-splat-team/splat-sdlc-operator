@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      # Pull the model before starting the server. Runs once per pod start.
+      initContainers:
+        - name: pull-model
+          image: ollama/ollama:latest
+          command: ["sh", "-c", "ollama serve & sleep 5 && ollama pull $(OLLAMA_MODEL) && kill %1"]
+          env:
+            - name: OLLAMA_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: model
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0"
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 6Gi
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+spec:
+  selector:
+    app: ollama
+  ports:
+    - port: 11434
+      targetPort: 11434
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ollama-config
+data:
+  # Change this to swap models without touching the Deployment.
+  # Good CPU options: llama3.2:3b  qwen2.5:3b  phi3.5:3.8b
+  model: llama3.2:3b

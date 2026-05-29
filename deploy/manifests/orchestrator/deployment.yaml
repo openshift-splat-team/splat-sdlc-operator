@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      containers:
+        - name: orchestrator
+          image: sdlc/orchestrator:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TEMPORAL_HOST
+              value: "temporal-frontend:7233"
+            - name: TEMPORAL_TASK_QUEUE
+              value: "orchestrator"
+            - name: MINIO_ENDPOINT
+              value: "minio:9000"
+            - name: LLM_API_BASE
+              value: "http://ollama.sdlc.svc.cluster.local:11434"
+          envFrom:
+            - secretRef:
+                name: minio-credentials
+            - secretRef:
+                name: llm-credentials
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15

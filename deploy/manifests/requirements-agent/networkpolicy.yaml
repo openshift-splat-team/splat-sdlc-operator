@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: requirements-agent-netpol
+spec:
+  podSelector:
+    matchLabels:
+      app: requirements-agent
+  policyTypes:
+    - Egress
+    - Ingress
+  ingress:
+    - ports:
+        - port: 8080
+  egress:
+    # Temporal gRPC
+    - ports:
+        - port: 7233
+          protocol: TCP
+    # MinIO
+    - ports:
+        - port: 9000
+          protocol: TCP
+    # Jira + LLM APIs (HTTPS)
+    - ports:
+        - port: 443
+          protocol: TCP
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

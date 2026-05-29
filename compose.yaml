@@ -1,0 +1,173 @@
+# Developer environment — single `podman-compose up` starts everything.
+# For production-like k8s testing use `make cluster` instead.
+
+x-worker: &worker
+  build:
+    context: .
+    dockerfile: docker/dev.Dockerfile
+  env_file: .env
+  environment:
+    - LITELLM_LOG=ERROR
+  volumes:
+    - ./agents:/app/agents:ro,z
+    - ./prompts:/app/prompts:ro,z
+    - ./scripts:/app/scripts:ro,z
+  depends_on:
+    temporal:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+    ollama-pull:
+      condition: service_completed_successfully
+  restart: on-failure
+
+services:
+
+  # ── Temporal ────────────────────────────────────────────────────────────────
+  # PostgreSQL backend for Temporal — ephemeral for local dev.
+  temporal-db:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  temporal:
+    image: docker.io/temporalio/auto-setup:1.24
+    environment:
+      - DB=postgres12
+      - POSTGRES_SEEDS=temporal-db
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - DB_PORT=5432
+      - DBNAME=temporal
+      - VISIBILITY_DBNAME=temporal_visibility
+      - SKIP_DEFAULT_NAMESPACE_CREATION=false
+    ports:
+      - "7233:7233"
+    depends_on:
+      temporal-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  temporal-ui:
+    image: docker.io/temporalio/ui:2.30.0
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:8233
+    ports:
+      - "8233:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+  # ── MinIO ───────────────────────────────────────────────────────────────────
+  minio:
+    image: docker.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Ollama ──────────────────────────────────────────────────────────────────
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama:z
+    healthcheck:
+      test: ["CMD", "/bin/ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # One-shot service that pulls the model then exits.
+  # Workers wait on this via depends_on: service_completed_successfully.
+  ollama-pull:
+    image: docker.io/ollama/ollama:latest
+    entrypoint: ["sh", "-c", "MODEL=$(echo $LITELLM_MODEL | sed 's|^ollama/||'); /bin/ollama list | grep -q \"$MODEL\" && echo \"Model $MODEL already present, skipping pull.\" || /bin/ollama pull $MODEL"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    env_file: .env
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  # ── Workers ─────────────────────────────────────────────────────────────────
+  orchestrator:
+    <<: *worker
+    command: python -m agents.orchestrator.worker
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_TASK_QUEUE=orchestrator
+      - MINIO_ENDPOINT=minio:9000
+      - LLM_API_BASE=http://ollama:11434
+
+  requirements-agent:
+    <<: *worker
+    command: python -m agents.requirements_agent.worker
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_TASK_QUEUE=requirements-agent
+      - MINIO_ENDPOINT=minio:9000
+      - LLM_API_BASE=http://ollama:11434
+
+  github-agent:
+    <<: *worker
+    command: python -m agents.github_agent.worker
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_TASK_QUEUE=github-agent
+      - MINIO_ENDPOINT=minio:9000
+      - LLM_API_BASE=http://ollama:11434
+
+  openshift-agent:
+    <<: *worker
+    command: python -m agents.openshift_agent.worker
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_TASK_QUEUE=openshift-agent
+      - MINIO_ENDPOINT=minio:9000
+      - LLM_API_BASE=http://ollama:11434
+
+  jira-agent:
+    <<: *worker
+    command: python -m agents.jira_agent.worker
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_TASK_QUEUE=jira-agent
+      - MINIO_ENDPOINT=minio:9000
+      - LLM_API_BASE=http://ollama:11434
+
+  enhancement-agent:
+    <<: *worker
+    command: python -m agents.enhancement_agent.worker
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_TASK_QUEUE=enhancement-agent
+      - MINIO_ENDPOINT=minio:9000
+      - LLM_API_BASE=http://ollama:11434
+
+volumes:
+  ollama-data:

@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator-netpol
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  policyTypes:
+    - Egress
+    - Ingress
+  ingress:
+    # Allow liveness probe from kubelet
+    - ports:
+        - port: 8080
+  egress:
+    # Temporal gRPC
+    - ports:
+        - port: 7233
+          protocol: TCP
+    # MinIO
+    - ports:
+        - port: 9000
+          protocol: TCP
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

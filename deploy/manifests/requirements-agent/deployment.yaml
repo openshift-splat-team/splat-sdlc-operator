@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: requirements-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: requirements-agent
+  template:
+    metadata:
+      labels:
+        app: requirements-agent
+    spec:
+      containers:
+        - name: requirements-agent
+          image: sdlc/requirements-agent:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TEMPORAL_HOST
+              value: "temporal-frontend:7233"
+            - name: TEMPORAL_TASK_QUEUE
+              value: "requirements-agent"
+            - name: MINIO_ENDPOINT
+              value: "minio:9000"
+            - name: LLM_API_BASE
+              value: "http://ollama.sdlc.svc.cluster.local:11434"
+          envFrom:
+            - secretRef:
+                name: jira-credentials
+            - secretRef:
+                name: llm-credentials
+            - secretRef:
+                name: minio-credentials
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
