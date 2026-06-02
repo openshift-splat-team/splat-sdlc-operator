@@ -1,4 +1,6 @@
 .PHONY: dev dev-down dev-build dev-logs dev-trigger \
+        gitea-token gitea-setup \
+        jira-seed jira-seed-force \
         cluster cluster-down cluster-status build load deploy rollout \
         ollama-logs ollama-model \
         port-forward dev-orchestrator dev-requirements dev-github trigger \
@@ -26,6 +28,53 @@ dev-logs:
 # Run trigger script inside the compose network
 dev-trigger:
 	$(COMPOSE) run --rm orchestrator python scripts/trigger.py
+
+# ── Gitea (local GitHub simulator) ───────────────────────────────────────────
+# Run 'make gitea-setup' once after 'make dev' to create the admin user, API
+# token, and staging org. Uses exec inside the running container to avoid
+# cross-container SQLite lock issues with podman-compose networking.
+
+gitea-setup:  ## Initialise Gitea: create admin user, API token, and staging org
+	@$(COMPOSE) exec --user 1000 gitea sh -c '\
+	  GITEA_WORK_DIR=/data gitea admin user create \
+	    --username gitea --password gitea123 \
+	    --email admin@gitea.local --admin 2>&1 | grep -v "already exists" || true; \
+	  TOKEN=$$(cat /data/gitea/gitea-token.txt 2>/dev/null | tr -d "[:space:]"); \
+	  if [ -z "$$TOKEN" ]; then \
+	    EXISTING_ID=$$(curl -s -u gitea:gitea123 http://localhost:3000/api/v1/users/gitea/tokens \
+	      | sed "s/.*\"id\":\([0-9]*\),\"name\":\"sdlc-agent\".*/\1/" | grep -E "^[0-9]+$$" | head -1); \
+	    if [ -n "$$EXISTING_ID" ]; then \
+	      curl -s -X DELETE -u gitea:gitea123 "http://localhost:3000/api/v1/users/gitea/tokens/$$EXISTING_ID"; \
+	    fi; \
+	    RESP=$$(curl -s -X POST http://localhost:3000/api/v1/users/gitea/tokens \
+	      -u gitea:gitea123 -H "Content-Type: application/json" \
+	      -d "{\"name\":\"sdlc-agent\",\"scopes\":[\"write:repository\",\"write:issue\",\"write:organization\",\"read:user\"]}"); \
+	    TOKEN=$$(echo "$$RESP" | sed "s/.*\"sha1\":\"\([^\"]*\)\".*/\1/" | grep -v "^{"); \
+	    printf "%s" "$$TOKEN" > /data/gitea/gitea-token.txt; \
+	    echo "[gitea-setup] Token created"; \
+	  else \
+	    echo "[gitea-setup] Token already exists"; \
+	  fi; \
+	  curl -s -X POST http://localhost:3000/api/v1/orgs \
+	    -u gitea:gitea123 -H "Content-Type: application/json" \
+	    -d "{\"username\":\"staging\",\"visibility\":\"private\"}" > /dev/null 2>&1 || true; \
+	  echo "[gitea-setup] Done. Run: make gitea-token"'
+
+# Print the Gitea API token (set as GITHUB_TOKEN in .env to use Gitea)
+gitea-token:  ## Print Gitea API token (paste into .env as GITHUB_TOKEN)
+	@$(COMPOSE) exec gitea cat /data/gitea/gitea-token.txt 2>/dev/null || \
+	  echo "No token found — run 'make gitea-setup' first."
+
+# ── Jira simulator seed ───────────────────────────────────────────────────────
+
+# Import xlsx exports from test_data/ into the running Jira simulator.
+# Idempotent — already-existing issues are skipped.
+# Requires: make dev  (jira-simulator must be running)
+jira-seed:  ## Import test_data/*.xlsx into the local Jira simulator (skips existing)
+	uv run python scripts/jira_seed.py
+
+jira-seed-force:  ## Re-import test_data/*.xlsx, overwriting existing issues and labels
+	uv run python scripts/jira_seed.py --force
 
 # ── Cluster lifecycle (Kind — integration / pre-deploy testing) ───────────────
 
