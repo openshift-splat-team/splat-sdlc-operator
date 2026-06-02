@@ -40,6 +40,10 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=1.10.0",
     "types-requests>=2.32.0",
+    "openpyxl>=3.1.0",
+    # Agent optional deps — needed locally for trigger.py and dev-* worker targets.
+    "PyGithub>=2.3.0",
+    "jira>=3.8.0",
 ]
 
 [build-system]
