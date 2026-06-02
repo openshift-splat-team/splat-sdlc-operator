@@ -17,9 +17,10 @@ def _connect(settings: RequirementsAgentSettings) -> JIRA:
 
 
 def parse_issue_key(url_or_key: str) -> str:
-    """Accept a Jira issue key or a browse URL and return the bare key."""
-    # e.g. https://issues.redhat.com/browse/OCPBUGS-1234
-    match = re.search(r'/browse/([A-Z][A-Z0-9_]+-\d+)', url_or_key)
+    """Accept a Jira issue key or a URL (real Jira or simulator) and return the bare key."""
+    # Real Jira: https://issues.redhat.com/browse/OCPBUGS-1234
+    # Simulator:  http://localhost:8080/ui/issue/SPLAT-2724
+    match = re.search(r'/(?:browse|issue)/([A-Z][A-Z0-9_]+-\d+)', url_or_key)
     if match:
         return match.group(1)
     # Bare key like PROJ-123
