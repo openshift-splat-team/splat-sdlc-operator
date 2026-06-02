@@ -173,6 +173,14 @@ class FullSDLCWorkflow:
             feature_description=feature_input.feature_description,
             target_ocp_version=feature_input.target_ocp_version,
             jira_epic_id=epic.key,
+            jira_context={
+                "epic_id": epic.key,
+                "title": epic.summary,
+                "stories": [
+                    {"title": s.summary, "description": s.description or ""}
+                    for s in epic.stories
+                ],
+            },
         )
         feature_plan_ref: str = await workflow.execute_child_workflow(
             OpenShiftFeatureWorkflow.run,

@@ -69,12 +69,8 @@ class OpenShiftFeatureWorkflow:
             )
             repo_contexts.append(ctx)
 
-        # Step 3 — fetch Jira context if an epic ID was provided
-        jira_context = None
-        if input.jira_epic_id:
-            # Jira fetch is handled by the requirements agent; here we pass through
-            # whatever context is already on the input as a plain dict
-            jira_context = {"epic_id": input.jira_epic_id}
+        # Step 3 — use Jira context from input if available
+        jira_context = input.jira_context
 
         # Step 4 — full feature analysis: ordered PR sequence + timeline + risks
         plan = await workflow.execute_activity(

@@ -108,6 +108,7 @@ class OpenShiftFeatureInput(BaseModel):
     feature_description: str
     target_ocp_version: str | None = None
     jira_epic_id: str | None = None
+    jira_context: dict | None = None
 
 
 class AffectedRepo(BaseModel):
