@@ -11,7 +11,7 @@ from agents.common.settings import EnhancementAgentSettings
 
 
 def _connect(settings: EnhancementAgentSettings) -> Github:
-    return Github(settings.github_token)
+    return Github(settings.github_token, base_url=settings.github_base_url)
 
 
 def _enhancement_path(feature_slug: str) -> str:

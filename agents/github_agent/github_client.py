@@ -16,7 +16,7 @@ from agents.common.settings import GitHubAgentSettings
 
 
 def _connect(settings: GitHubAgentSettings) -> Github:
-    return Github(settings.github_token)
+    return Github(settings.github_token, base_url=settings.github_base_url)
 
 
 def _parse_pr_url(url: str) -> tuple[str, int]:

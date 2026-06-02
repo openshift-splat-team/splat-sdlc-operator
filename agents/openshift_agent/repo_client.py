@@ -7,7 +7,7 @@ from agents.common.settings import OpenShiftAgentSettings
 
 
 def _connect(settings: OpenShiftAgentSettings) -> Github:
-    return Github(settings.github_token)
+    return Github(settings.github_token, base_url=settings.github_base_url)
 
 
 def get_go_mod(repo_name: str, settings: OpenShiftAgentSettings) -> str | None:

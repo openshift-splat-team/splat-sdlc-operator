@@ -46,6 +46,7 @@ class JiraAgentSettings(JiraBaseSettings):
 class GitHubAgentSettings(BaseAgentSettings):
     temporal_task_queue: str = "github-agent"
 
+    github_base_url: str = Field(default="https://api.github.com", description="GitHub API base URL; set to http://localhost:3000/api/v1 for local Gitea")
     github_token: str = Field(..., description="GitHub personal access token")
     staging_github_org: str = Field(default="", description="GitHub org where forks are created")
 
@@ -53,6 +54,7 @@ class GitHubAgentSettings(BaseAgentSettings):
 class EnhancementAgentSettings(BaseAgentSettings):
     temporal_task_queue: str = "enhancement-agent"
 
+    github_base_url: str = Field(default="https://api.github.com", description="GitHub API base URL; set to http://localhost:3000/api/v1 for local Gitea")
     github_token: str = Field(..., description="GitHub PAT for enhancement repo operations")
     staging_github_org: str = Field(..., description="GitHub org where enhancement forks are created")
     enhancement_repo: str = Field(default="openshift-splat-team/enhancements", description="owner/repo for enhancements")
@@ -61,4 +63,5 @@ class EnhancementAgentSettings(BaseAgentSettings):
 class OpenShiftAgentSettings(BaseAgentSettings):
     temporal_task_queue: str = "openshift-agent"
 
+    github_base_url: str = Field(default="https://api.github.com", description="GitHub API base URL; set to http://localhost:3000/api/v1 for local Gitea")
     github_token: str = Field(..., description="GitHub PAT for reading openshift org repos")
