@@ -1,0 +1,68 @@
+# llama-swap example config for running promptfoo evals locally.
+#
+# llama-swap is an OpenAI-compatible proxy that hot-swaps local models
+# on demand. When promptfoo sends a request for "Qwen3-14B", llama-swap
+# starts the matching llama-server process, routes the request, and
+# unloads it when idle — so you can compare multiple models on a single
+# GPU without running them all at once.
+#
+# Install:
+#   brew tap mostlygeek/llama-swap && brew install llama-swap
+#   # or grab a binary from https://github.com/mostlygeek/llama-swap/releases
+#
+# Run:
+#   llama-swap --config evals/llama-swap.example.yaml --listen localhost:8080
+#
+# Then in .env (or export):
+#   LLM_API_BASE=http://localhost:8080/v1
+#   LLM_API_KEY=any
+#   LITELLM_MODEL=openai/Qwen3-14B
+#
+# Eval:
+#   make eval              # single model from LITELLM_MODEL
+#   make eval-compare      # all models defined below, side-by-side
+#
+# Model files:
+#   Download GGUF files from https://unsloth.ai or Hugging Face and update
+#   the paths below. The model IDs here must match the litellm_model values
+#   in promptfooconfig.compare.yaml (after stripping the "openai/" prefix).
+
+macros:
+  models_dir: "${env.HOME}/models"
+  llama_server: "llama-server"
+
+healthCheckTimeout: 180
+globalTTL: 300
+
+models:
+  Qwen3-14B:
+    cmd: >
+      ${llama_server} --port ${PORT}
+      --model ${models_dir}/Qwen3-14B-Q4_K_M.gguf
+      --ctx-size 8192
+      --n-gpu-layers 99
+    ttl: 300
+
+  Qwen3-30B-A3B:
+    cmd: >
+      ${llama_server} --port ${PORT}
+      --model ${models_dir}/Qwen3-30B-A3B-Q4_K_M.gguf
+      --ctx-size 8192
+      --n-gpu-layers 99
+    ttl: 300
+
+  Gemma-4-12B:
+    cmd: >
+      ${llama_server} --port ${PORT}
+      --model ${models_dir}/Gemma-4-12B-it-Q4_K_M.gguf
+      --ctx-size 8192
+      --n-gpu-layers 99
+    ttl: 300
+
+  Gemma-3-12B:
+    cmd: >
+      ${llama_server} --port ${PORT}
+      --model ${models_dir}/Gemma-3-12B-it-Q4_K_M.gguf
+      --ctx-size 8192
+      --n-gpu-layers 99
+    ttl: 300

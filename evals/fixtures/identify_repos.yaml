@@ -1,0 +1,63 @@
+- __template_path: openshift_agent/identify_repos.md
+  change_description: >
+    Add a new MachineConfig field to support configuring cgroup v2 memory
+    pressure thresholds on RHCOS nodes. This requires a new API type in
+    openshift/api for the threshold configuration, MCO changes to render
+    the cgroup config drop-in, and e2e tests to verify the behavior
+    across upgrades.
+  assert:
+    - type: is-json
+    - type: python
+      value: file://evals/assertions/validate_pydantic.py
+      config:
+        model: RepoIdentificationResult
+    - type: python
+      value: file://evals/assertions/check_repo_names.py
+    - type: javascript
+      value: "JSON.parse(output).mco_involved === true"
+    - type: javascript
+      value: "JSON.parse(output).api_change_required === true"
+    - type: javascript
+      value: "JSON.parse(output).repos.some(r => r.name === 'openshift/api')"
+    - type: javascript
+      value: "JSON.parse(output).repos.some(r => r.name === 'openshift/machine-config-operator')"
+
+- __template_path: openshift_agent/identify_repos.md
+  change_description: >
+    Update the cluster-ingress-operator to support configurable TLS
+    cipher suites on IngressController resources. The cipher list should
+    be validated against a known-good set and exposed via the
+    IngressController spec. No new CRDs or API types are needed — this
+    extends the existing IngressController API in openshift/api.
+  assert:
+    - type: is-json
+    - type: python
+      value: file://evals/assertions/validate_pydantic.py
+      config:
+        model: RepoIdentificationResult
+    - type: python
+      value: file://evals/assertions/check_repo_names.py
+    - type: javascript
+      value: "JSON.parse(output).repos.some(r => r.name === 'openshift/cluster-ingress-operator')"
+    - type: javascript
+      value: "JSON.parse(output).mco_involved === false"
+
+- __template_path: openshift_agent/identify_repos.md
+  change_description: >
+    Add a new CSI driver operator for a hypothetical block storage
+    backend. This requires new API types in openshift/api for the driver
+    configuration CRD, a new operator repo (openshift/csi-driver-example),
+    CI job definitions in openshift/release, and e2e storage tests in
+    openshift/openshift-tests.
+  assert:
+    - type: is-json
+    - type: python
+      value: file://evals/assertions/validate_pydantic.py
+      config:
+        model: RepoIdentificationResult
+    - type: python
+      value: file://evals/assertions/check_repo_names.py
+    - type: javascript
+      value: "JSON.parse(output).api_change_required === true"
+    - type: javascript
+      value: "JSON.parse(output).repos.length >= 3"

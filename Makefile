@@ -4,12 +4,14 @@
         cluster cluster-down cluster-status build load deploy rollout \
         ollama-logs ollama-model \
         port-forward dev-orchestrator dev-requirements dev-github trigger \
-        test test-integration lint fmt secrets-template clean
+        test test-integration lint fmt secrets-template clean \
+        eval eval-view eval-compare eval-ci
 
 CLUSTER_NAME  := sdlc
 NAMESPACE     := sdlc
 IMAGES        := sdlc/base sdlc/orchestrator sdlc/requirements-agent sdlc/github-agent sdlc/openshift-agent
-COMPOSE       := podman-compose
+COMPOSE           := podman-compose
+PROMPTFOO_VERSION := 0.121.14
 
 # ── Local dev (compose) ───────────────────────────────────────────────────────
 
@@ -159,6 +161,20 @@ test:
 
 test-integration:
 	uv run pytest tests/integration -v
+
+# ── Prompt evaluation (promptfoo) ─────────────────────────────────────────────
+
+eval:
+	cd evals && npx -y promptfoo@$(PROMPTFOO_VERSION) eval
+
+eval-view:
+	cd evals && npx -y promptfoo@$(PROMPTFOO_VERSION) eval && npx -y promptfoo@$(PROMPTFOO_VERSION) view
+
+eval-compare:
+	cd evals && npx -y promptfoo@$(PROMPTFOO_VERSION) eval -c promptfooconfig.compare.yaml
+
+eval-ci:
+	cd evals && npx -y promptfoo@$(PROMPTFOO_VERSION) eval --output output/results.json --fail-on-error
 
 # ── Code quality ──────────────────────────────────────────────────────────────
 
