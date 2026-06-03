@@ -4,11 +4,16 @@ prompts:
   - id: "{{__template_path}}"
     label: "passthrough"
 
-# Model names below are examples — replace with whatever your local server
-# reports at /v1/models. The openai/ prefix tells LiteLLM to use the
-# OpenAI-compatible protocol; llm_api_base points at your local server.
+# Model names must match the IDs in your llama-swap config. See
+# llama-swap.example.yaml for a starter config that defines these four
+# models. llama-swap auto-swaps the backend when the model name changes,
+# so only one model runs at a time on your GPU.
 #
-# Run with: make eval-compare
+# Start llama-swap:
+#   llama-swap --config evals/llama-swap.example.yaml --listen localhost:8080
+#
+# Run comparison:
+#   make eval-compare
 
 providers:
   - id: file://provider.py
@@ -16,7 +21,7 @@ providers:
     config:
       litellm_model: "openai/Qwen3-14B"
       llm_api_key: "any"
-      llm_api_base: "${LLM_API_BASE:-http://localhost:8000/v1}"
+      llm_api_base: "${LLM_API_BASE:-http://localhost:8080/v1}"
       temperature: 0.2
       max_tokens: 4096
 
@@ -25,7 +30,7 @@ providers:
     config:
       litellm_model: "openai/Qwen3-30B-A3B"
       llm_api_key: "any"
-      llm_api_base: "${LLM_API_BASE:-http://localhost:8000/v1}"
+      llm_api_base: "${LLM_API_BASE:-http://localhost:8080/v1}"
       temperature: 0.2
       max_tokens: 4096
 
@@ -34,7 +39,7 @@ providers:
     config:
       litellm_model: "openai/Gemma-4-12B"
       llm_api_key: "any"
-      llm_api_base: "${LLM_API_BASE:-http://localhost:8000/v1}"
+      llm_api_base: "${LLM_API_BASE:-http://localhost:8080/v1}"
       temperature: 0.2
       max_tokens: 4096
 
@@ -43,7 +48,7 @@ providers:
     config:
       litellm_model: "openai/Gemma-3-12B"
       llm_api_key: "any"
-      llm_api_base: "${LLM_API_BASE:-http://localhost:8000/v1}"
+      llm_api_base: "${LLM_API_BASE:-http://localhost:8080/v1}"
       temperature: 0.2
       max_tokens: 4096
 
