@@ -1,0 +1,56 @@
+description: "SDLC agent prompt evaluation — multi-model comparison"
+
+prompts:
+  - id: "{{__template_path}}"
+    label: "passthrough"
+
+# Model names below are examples — replace with whatever your local server
+# reports at /v1/models. The openai/ prefix tells LiteLLM to use the
+# OpenAI-compatible protocol; llm_api_base points at your local server.
+#
+# Run with: make eval-compare
+
+providers:
+  - id: file://provider.py
+    label: "Qwen3-14B"
+    config:
+      litellm_model: "openai/Qwen3-14B"
+      llm_api_key: "any"
+      llm_api_base: "${LLM_API_BASE:-http://localhost:8000/v1}"
+      temperature: 0.2
+      max_tokens: 4096
+
+  - id: file://provider.py
+    label: "Qwen3-30B-A3B"
+    config:
+      litellm_model: "openai/Qwen3-30B-A3B"
+      llm_api_key: "any"
+      llm_api_base: "${LLM_API_BASE:-http://localhost:8000/v1}"
+      temperature: 0.2
+      max_tokens: 4096
+
+  - id: file://provider.py
+    label: "Gemma-4-12B"
+    config:
+      litellm_model: "openai/Gemma-4-12B"
+      llm_api_key: "any"
+      llm_api_base: "${LLM_API_BASE:-http://localhost:8000/v1}"
+      temperature: 0.2
+      max_tokens: 4096
+
+  - id: file://provider.py
+    label: "Gemma-3-12B"
+    config:
+      litellm_model: "openai/Gemma-3-12B"
+      llm_api_key: "any"
+      llm_api_base: "${LLM_API_BASE:-http://localhost:8000/v1}"
+      temperature: 0.2
+      max_tokens: 4096
+
+defaultTest:
+  assert:
+    - type: is-json
+
+tests:
+  - file://fixtures/identify_repos.yaml
+  - file://fixtures/run_review.yaml

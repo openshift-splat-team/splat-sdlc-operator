@@ -1,0 +1,104 @@
+- __template_path: github_agent/run_review.md
+  pr_title: "Fix nil pointer dereference in MCO reconciler"
+  pr_body: "Fixes a crash when the target ConfigMap is deleted mid-reconcile."
+  head_branch: "fix/nil-pointer-mco"
+  base_branch: "main"
+  diff: |
+    diff --git a/pkg/daemon/update.go b/pkg/daemon/update.go
+    index a1b2c3d..e4f5g6h 100644
+    --- a/pkg/daemon/update.go
+    +++ b/pkg/daemon/update.go
+    @@ -142,7 +142,10 @@ func (dn *Daemon) applyOSChanges(config *mcfgv1.MachineConfig) error {
+     	cm, err := dn.kubeClient.CoreV1().ConfigMaps(ctrlcommon.MCONamespace).Get(ctx, name, metav1.GetOptions{})
+    -	if err != nil {
+    +	if apierrors.IsNotFound(err) {
+    +		klog.Warningf("ConfigMap %s not found, skipping OS change", name)
+    +		return nil
+    +	} else if err != nil {
+     		return fmt.Errorf("failed to get configmap %s: %w", name, err)
+     	}
+     	osImageURL := cm.Data["osImageURL"]
+  assert:
+    - type: is-json
+    - type: python
+      value: file://evals/assertions/validate_pydantic.py
+      config:
+        model: ReviewResult
+    - type: javascript
+      value: "JSON.parse(output).approved === true"
+    - type: javascript
+      value: "JSON.parse(output).summary.length > 20"
+
+- __template_path: github_agent/run_review.md
+  pr_title: "Add debug endpoint with hardcoded credentials"
+  pr_body: ""
+  head_branch: "feature/debug-endpoint"
+  base_branch: "main"
+  diff: |
+    diff --git a/pkg/server/debug.go b/pkg/server/debug.go
+    new file mode 100644
+    index 0000000..1a2b3c4
+    --- /dev/null
+    +++ b/pkg/server/debug.go
+    @@ -0,0 +1,18 @@
+    +package server
+    +
+    +import (
+    +	"fmt"
+    +	"net/http"
+    +)
+    +
+    +func debugHandler(w http.ResponseWriter, r *http.Request) {
+    +	user := r.URL.Query().Get("user")
+    +	pass := r.URL.Query().Get("pass")
+    +	if user == "admin" && pass == "changeme123!" {
+    +		fmt.Fprintf(w, "Debug info: %+v", getAllSecrets())
+    +	}
+    +}
+    +
+    +func init() {
+    +	http.HandleFunc("/debug", debugHandler)
+    +}
+  assert:
+    - type: is-json
+    - type: python
+      value: file://evals/assertions/validate_pydantic.py
+      config:
+        model: ReviewResult
+    - type: javascript
+      value: "JSON.parse(output).approved === false"
+    - type: javascript
+      value: "JSON.parse(output).inline_comments.some(c => c.severity === 'error')"
+
+- __template_path: github_agent/run_review.md
+  pr_title: "Refactor logging to use klog structured output"
+  pr_body: >
+    Replaces fmt.Printf and glog calls with klog.InfoS / klog.ErrorS
+    for structured logging across the ingress operator controller.
+  head_branch: "refactor/structured-logging"
+  base_branch: "main"
+  diff: |
+    diff --git a/pkg/operator/controller/ingress/controller.go b/pkg/operator/controller/ingress/controller.go
+    index 1234567..abcdef0 100644
+    --- a/pkg/operator/controller/ingress/controller.go
+    +++ b/pkg/operator/controller/ingress/controller.go
+    @@ -5,7 +5,7 @@ import (
+     	"context"
+    -	"fmt"
+    +	"k8s.io/klog/v2"
+     )
+
+    @@ -89,3 +89,3 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
+    -	fmt.Printf("reconciling ingress controller %s/%s\n", req.Namespace, req.Name)
+    +	klog.InfoS("reconciling ingress controller", "namespace", req.Namespace, "name", req.Name)
+    @@ -105,3 +105,3 @@ func (r *reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
+    -	fmt.Printf("error updating status: %v\n", err)
+    +	klog.ErrorS(err, "failed to update status", "namespace", req.Namespace, "name", req.Name)
+  assert:
+    - type: is-json
+    - type: python
+      value: file://evals/assertions/validate_pydantic.py
+      config:
+        model: ReviewResult
+    - type: javascript
+      value: "JSON.parse(output).approved === true"

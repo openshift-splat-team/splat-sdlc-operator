@@ -1,0 +1,23 @@
+description: "SDLC agent prompt evaluation"
+
+prompts:
+  - id: "{{__template_path}}"
+    label: "passthrough"
+
+providers:
+  - id: file://provider.py
+    label: "${LITELLM_MODEL:-openai/gpt-4o}"
+    config:
+      litellm_model: "${LITELLM_MODEL:-openai/gpt-4o}"
+      llm_api_key: "${LLM_API_KEY:-}"
+      llm_api_base: "${LLM_API_BASE}"
+      temperature: 0.2
+      max_tokens: 4096
+
+defaultTest:
+  assert:
+    - type: is-json
+
+tests:
+  - file://fixtures/identify_repos.yaml
+  - file://fixtures/run_review.yaml
