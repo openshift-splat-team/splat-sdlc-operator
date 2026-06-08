@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 
+import requests
 from github import Github, GithubException
 from github.PullRequest import PullRequest as GHPullRequest
 
@@ -32,6 +33,11 @@ def _render_doc_markdown(doc: EnhancementDoc) -> str:
         "## Risks and Mitigations\n\n" + "\n".join(f"- {r}" for r in doc.risks),
         "## Drawbacks\n\n" + "\n".join(f"- {d}" for d in doc.drawbacks),
         "## Alternatives\n\n" + "\n".join(f"- {a}" for a in doc.alternatives),
+        "## Repositories to Fork\n\n" + (
+            "\n".join(f"- `{r}`" for r in doc.repos_to_fork)
+            if doc.repos_to_fork
+            else "_No repositories identified._"
+        ),
     ]
     return "\n\n".join(sections)
 
@@ -70,7 +76,11 @@ def fork_enhancement_repo(
 
     repo = gh.get_repo(enhancement_repo)
     org = gh.get_organization(staging_org)
-    repo.create_fork(organization=org)
+    try:
+        repo.create_fork(organization=org)
+    except GithubException as exc:
+        if exc.status != 409:
+            raise
     return fork_slug
 
 
@@ -90,9 +100,18 @@ def create_enhancement_branch(
     except GithubException:
         pass
 
+    # PyGithub's create_git_ref (POST /git/refs) returns 405 on Gitea; use the branches API.
+    owner, name = fork_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
     default_branch = repo.default_branch
-    ref = repo.get_git_ref(f"heads/{default_branch}")
-    repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=ref.object.sha)
+    resp = requests.post(
+        f"{base}/repos/{owner}/{name}/branches",
+        headers={"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"},
+        json={"new_branch_name": branch_name, "old_branch_name": default_branch},
+        timeout=15,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to create branch {branch_name} in {fork_slug}: {resp.status_code} {resp.text}")
     return branch_name
 
 
@@ -109,14 +128,35 @@ def commit_enhancement_doc(
     path = _enhancement_path(feature_slug)
     content = _render_doc_markdown(doc)
     message = f"enhancements: add {feature_slug} enhancement proposal"
+    content_b64 = base64.b64encode(content.encode()).decode()
 
     try:
         existing = repo.get_contents(path, ref=branch)
         result = repo.update_file(path, message, content, existing.sha, branch=branch)
+        return result["commit"].sha
     except GithubException:
-        result = repo.create_file(path, message, content, branch=branch)
+        pass
 
-    return result["commit"].sha
+    # Try PyGithub's create_file (PUT) — works on GitHub. Gitea rejects PUT without a SHA
+    # (422 "[SHA]: Required"), so fall back to POST which is Gitea's create endpoint.
+    try:
+        result = repo.create_file(path, message, content, branch=branch)
+        return result["commit"].sha
+    except GithubException as exc:
+        if exc.status != 422:
+            raise
+
+    owner, name = fork_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    resp = requests.post(
+        f"{base}/repos/{owner}/{name}/contents/{path}",
+        headers={"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"},
+        json={"message": message, "content": content_b64, "branch": branch},
+        timeout=15,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to create file {path} in {fork_slug}: {resp.status_code} {resp.text}")
+    return resp.json()["commit"]["sha"]
 
 
 def create_enhancement_pr(
@@ -139,13 +179,21 @@ def create_enhancement_pr(
         title = f"[{jira_story_key}] {title}"
         body += f"\n\n---\nJira: {jira_story_key}"
 
-    pr: GHPullRequest = base.create_pull(
-        title=title,
-        body=body,
-        head=f"{fork_owner}:{branch}",
-        base=base_branch,
-        draft=False,
-    )
+    try:
+        pr: GHPullRequest = base.create_pull(
+            title=title,
+            body=body,
+            head=f"{fork_owner}:{branch}",
+            base=base_branch,
+            draft=False,
+        )
+    except GithubException as exc:
+        if exc.status != 409:
+            raise
+        existing = list(base.get_pulls(state="open", head=f"{fork_owner}:{branch}", base=base_branch))
+        if not existing:
+            raise
+        pr = existing[0]
     return CreatedPR(
         url=pr.html_url,
         number=pr.number,
@@ -165,8 +213,19 @@ def get_pr_state(
     repo = gh.get_repo(repo_slug)
     pr: GHPullRequest = repo.get_pull(pr_number)
 
-    reviews = list(pr.get_reviews())
-    approved_count = sum(1 for r in reviews if r.state == "APPROVED")
+    # PyGithub's pr.get_reviews() builds a URL path that Gitea returns without
+    # the /api/v1 prefix, triggering an AssertionError in Requester.  Use the
+    # Gitea REST API directly instead.
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    resp = requests.get(
+        f"{base}/repos/{owner}/{name}/pulls/{pr_number}/reviews",
+        headers={"Authorization": f"token {settings.github_token}"},
+        timeout=15,
+    )
+    approved_count = 0
+    if resp.status_code == 200:
+        approved_count = sum(1 for r in resp.json() if r.get("state") == "APPROVED")
 
     return {
         "state": pr.state,
@@ -174,3 +233,85 @@ def get_pr_state(
         "approved_review_count": approved_count,
         "labels": [label.name for label in pr.labels],
     }
+
+
+def get_pr_comments(
+    repo_slug: str,
+    pr_number: int,
+    since_count: int,
+    settings: EnhancementAgentSettings,
+) -> list[dict]:
+    """Fetch PR comments (issue + review) newer than `since_count` via Gitea REST API."""
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}"}
+
+    all_comments: list[dict] = []
+
+    # Issue-level comments (conversation tab)
+    resp = requests.get(
+        f"{base}/repos/{owner}/{name}/issues/{pr_number}/comments",
+        headers=headers,
+        timeout=15,
+    )
+    if resp.status_code == 200:
+        for c in resp.json():
+            all_comments.append({
+                "id": c.get("id"),
+                "body": c.get("body", ""),
+                "author": c.get("user", {}).get("login", ""),
+                "created_at": c.get("created_at", ""),
+            })
+
+    # Review comments (Files tab / inline code comments) — Gitea nests these
+    # under each review, not at /pulls/{n}/comments (which returns 404).
+    resp = requests.get(
+        f"{base}/repos/{owner}/{name}/pulls/{pr_number}/reviews",
+        headers=headers,
+        timeout=15,
+    )
+    if resp.status_code == 200:
+        for review in resp.json():
+            review_id = review.get("id")
+            rc_resp = requests.get(
+                f"{base}/repos/{owner}/{name}/pulls/{pr_number}/reviews/{review_id}/comments",
+                headers=headers,
+                timeout=15,
+            )
+            if rc_resp.status_code == 200:
+                for c in rc_resp.json():
+                    all_comments.append({
+                        "id": c.get("id"),
+                        "body": c.get("body", ""),
+                        "author": c.get("user", {}).get("login", ""),
+                        "created_at": c.get("created_at", ""),
+                    })
+
+    bot_user = settings.github_bot_user
+    all_comments = [c for c in all_comments if c["author"] != bot_user]
+    all_comments.sort(key=lambda c: c.get("created_at", ""))
+    return [
+        {"id": c["id"], "body": c["body"], "author": c["author"]}
+        for c in all_comments[since_count:]
+    ]
+
+
+def post_pr_comment(
+    repo_slug: str,
+    pr_number: int,
+    body: str,
+    settings: EnhancementAgentSettings,
+) -> None:
+    """Post a comment on the enhancement PR via Gitea REST API."""
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    resp = requests.post(
+        f"{base}/repos/{owner}/{name}/issues/{pr_number}/comments",
+        headers={"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"},
+        json={"body": body},
+        timeout=15,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Failed to post comment on {repo_slug}#{pr_number}: {resp.status_code} {resp.text}"
+        )

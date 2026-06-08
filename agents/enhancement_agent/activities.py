@@ -7,6 +7,7 @@ from temporalio import activity
 from agents.common import llm, prompts, storage
 from agents.common.models import (
     CreatedPR,
+    EnhancementCommentResult,
     EnhancementDoc,
     EnhancementPRInput,
     JiraEpic,
@@ -27,6 +28,7 @@ async def generate_enhancement_doc(
     epic: JiraEpic,
     feature_plan: OpenShiftFeaturePlan,
     target_ocp_version: str | None,
+    memories_context: str = "",
 ) -> EnhancementDoc:
     settings = EnhancementAgentSettings()
     activity.logger.info("Generating enhancement doc for epic %s", epic.key)
@@ -41,6 +43,7 @@ async def generate_enhancement_doc(
         parent_key=epic.parent_key,
         parent_summary=epic.parent_summary,
         parent_description=epic.parent_description,
+        memories=memories_context,
     )
     return await llm.complete_structured(messages, settings, EnhancementDoc)
 
@@ -56,9 +59,11 @@ async def submit_enhancement_pr(
 
     feature_slug = _feature_slug(doc.title)
 
+    activity.logger.info("Forking %s into org %s", pr_input.repo, settings.staging_github_org)
     fork_slug = enhancement_client.fork_enhancement_repo(
         pr_input.repo, settings.staging_github_org, settings
     )
+    activity.logger.info("Fork ready: %s; creating branch %s", fork_slug, feature_branch)
     enhancement_client.create_enhancement_branch(fork_slug, feature_branch, settings)
     enhancement_client.commit_enhancement_doc(fork_slug, feature_branch, doc, feature_slug, settings)
 
@@ -86,3 +91,67 @@ async def store_enhancement_doc(doc: EnhancementDoc, run_id: str) -> str:
     key = f"runs/{run_id}/enhancement-doc.json"
     activity.logger.info("Storing enhancement doc to MinIO key %s", key)
     return storage.put_artifact(key, doc, settings)
+
+
+# ── Comment-processing activities ────────────────────────────────────────────
+
+
+@activity.defn
+async def fetch_enhancement_pr_comments(
+    repo_slug: str,
+    pr_number: int,
+    since_count: int,
+) -> list[dict]:
+    settings = EnhancementAgentSettings()
+    activity.logger.info("Fetching comments on %s#%d since count %d", repo_slug, pr_number, since_count)
+    comments = enhancement_client.get_pr_comments(repo_slug, pr_number, since_count, settings)
+    return [
+        {"author": c["author"], "body": c["body"]}
+        for c in comments
+        if not c["body"].startswith("**Enhancement Agent")
+    ]
+
+
+@activity.defn
+async def process_enhancement_comments(
+    enhancement_doc: EnhancementDoc,
+    comments: list[dict],
+    epic: JiraEpic,
+    feature_plan: OpenShiftFeaturePlan,
+) -> EnhancementCommentResult:
+    settings = EnhancementAgentSettings()
+    activity.logger.info("Processing %d enhancement PR comments", len(comments))
+
+    messages = prompts.render(
+        "enhancement_agent/process_comments.md",
+        current_doc=enhancement_doc.model_dump(),
+        comments=comments,
+        epic_key=epic.key,
+        epic_summary=epic.summary,
+        feature_plan_summary=feature_plan.summary,
+    )
+    return await llm.complete_structured(messages, settings, EnhancementCommentResult)
+
+
+@activity.defn
+async def commit_revised_enhancement_doc(
+    fork_slug: str,
+    branch: str,
+    doc: EnhancementDoc,
+    feature_slug: str,
+) -> str:
+    settings = EnhancementAgentSettings()
+    activity.logger.info("Committing revised enhancement doc to %s branch %s", fork_slug, branch)
+    return enhancement_client.commit_enhancement_doc(fork_slug, branch, doc, feature_slug, settings)
+
+
+@activity.defn
+async def post_enhancement_pr_comment(
+    repo_slug: str,
+    pr_number: int,
+    body: str,
+) -> None:
+    settings = EnhancementAgentSettings()
+    prefixed_body = f"**Enhancement Agent Response**\n\n{body}"
+    activity.logger.info("Posting response comment on %s#%d", repo_slug, pr_number)
+    enhancement_client.post_pr_comment(repo_slug, pr_number, prefixed_body, settings)

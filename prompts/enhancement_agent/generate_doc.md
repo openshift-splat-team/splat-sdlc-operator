@@ -14,6 +14,13 @@ Guidelines:
 - Graduation Criteria should reference e2e tests or observable signals
 - Drawbacks and Alternatives should reflect genuine trade-offs considered
 
+{% if memories %}
+{{ memories }}
+
+Use any relevant memories above to inform your proposal — e.g., reviewer preferences,
+past architectural decisions, or process notes from previous runs.
+{% endif %}
+
 Respond ONLY with a valid JSON object. Do not include markdown fences or any
 other text outside the JSON.
 
@@ -29,7 +36,8 @@ Output schema:
   "risks": ["string — risk: mitigation", ...],
   "graduation_criteria": "string — how we know this is ready for GA",
   "drawbacks": ["string", ...],
-  "alternatives": ["string", ...]
+  "alternatives": ["string", ...],
+  "repos_to_fork": ["string — owner/repo slug, e.g. 'openshift/node-feature-discovery'", ...]
 }
 
 <!-- role: user -->
@@ -77,5 +85,7 @@ Output schema:
 - {{ note }}
 {% endfor %}
 {% endif %}
+
+For `repos_to_fork`, list every unique repository slug (owner/repo) that must be forked into the staging org to implement this enhancement. Derive this directly from the PR Sequence above — include the repo from every step. Preserve any repo that is marked required or that appears in Tier 0 or Tier 1.
 
 Produce the OpenShift enhancement document JSON now.
