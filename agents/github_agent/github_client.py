@@ -1,6 +1,9 @@
 """Thin wrapper around the GitHub REST API via PyGithub."""
 from __future__ import annotations
 
+import base64
+
+import requests
 from github import Github, GithubException
 from github.PullRequest import PullRequest as GHPullRequest
 
@@ -89,13 +92,21 @@ def create_pr(input: CreatePRInput, settings: GitHubAgentSettings) -> CreatedPR:
         jira_link = f"\n\n---\nJira: [{input.jira_issue_key}]"
         body = body + jira_link
 
-    pr: GHPullRequest = repo.create_pull(
-        title=title,
-        body=body,
-        head=input.head_branch,
-        base=input.base_branch,
-        draft=input.draft,
-    )
+    try:
+        pr: GHPullRequest = repo.create_pull(
+            title=title,
+            body=body,
+            head=input.head_branch,
+            base=input.base_branch,
+            draft=input.draft,
+        )
+    except GithubException as exc:
+        if exc.status != 409:
+            raise
+        existing = list(repo.get_pulls(state="open", head=input.head_branch, base=input.base_branch))
+        if not existing:
+            raise
+        pr = existing[0]
 
     return CreatedPR(
         url=pr.html_url,
@@ -139,7 +150,11 @@ def fork_repo(source_slug: str, target_org: str, settings: GitHubAgentSettings) 
 
     source = gh.get_repo(source_slug)
     org = gh.get_organization(target_org)
-    source.create_fork(organization=org)
+    try:
+        source.create_fork(organization=org)
+    except GithubException as exc:
+        if exc.status != 409:
+            raise
     return fork_slug
 
 
@@ -158,8 +173,17 @@ def create_branch(
     except GithubException:
         pass
 
-    ref = repo.get_git_ref(f"heads/{from_ref}")
-    repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=ref.object.sha)
+    # PyGithub's create_git_ref (POST /git/refs) returns 405 on Gitea; use the branches API.
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    resp = requests.post(
+        f"{base}/repos/{owner}/{name}/branches",
+        headers={"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"},
+        json={"new_branch_name": branch_name, "old_branch_name": from_ref},
+        timeout=15,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to create branch {branch_name} in {repo_slug}: {resp.status_code} {resp.text}")
     return branch_name
 
 
@@ -178,10 +202,31 @@ def push_file_change(
     try:
         existing = repo.get_contents(path, ref=branch)
         result = repo.update_file(path, commit_message, content, existing.sha, branch=branch)
+        return result["commit"].sha
     except GithubException:
-        result = repo.create_file(path, commit_message, content, branch=branch)
+        pass
 
-    return result["commit"].sha
+    # Try PyGithub's create_file (PUT) — works on GitHub. Gitea rejects PUT without a SHA
+    # (422 "[SHA]: Required"), so fall back to POST which is Gitea's create endpoint.
+    try:
+        result = repo.create_file(path, commit_message, content, branch=branch)
+        return result["commit"].sha
+    except GithubException as exc:
+        if exc.status != 422:
+            raise
+
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    content_b64 = base64.b64encode(content.encode()).decode()
+    resp = requests.post(
+        f"{base}/repos/{owner}/{name}/contents/{path}",
+        headers={"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"},
+        json={"message": commit_message, "content": content_b64, "branch": branch},
+        timeout=15,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to create file {path} in {repo_slug}: {resp.status_code} {resp.text}")
+    return resp.json()["commit"]["sha"]
 
 
 def add_label(repo_slug: str, pr_number: int, label: str, settings: GitHubAgentSettings) -> None:
@@ -218,6 +263,63 @@ def get_pr_comments_since(
         if c.id > since_comment_id:
             comments.append({"id": c.id, "body": c.body, "author": c.user.login})
     return comments
+
+
+def get_file_content(repo_slug: str, path: str, ref: str, settings: GitHubAgentSettings) -> str:
+    """Return decoded text content of a file at the given ref."""
+    gh = _connect(settings)
+    contents = gh.get_repo(repo_slug).get_contents(path, ref=ref)
+    return contents.decoded_content.decode("utf-8")
+
+
+def get_repo_context(source_slug: str, branch: str, settings: GitHubAgentSettings) -> dict:
+    """Fetch go.mod, README (truncated), and root directory listing from a repo."""
+    gh = _connect(settings)
+    repo = gh.get_repo(source_slug)
+
+    go_mod = ""
+    try:
+        go_mod = repo.get_contents("go.mod", ref=branch).decoded_content.decode("utf-8")
+    except GithubException:
+        pass
+
+    readme = ""
+    for name in ("README.md", "readme.md", "README"):
+        try:
+            readme = repo.get_contents(name, ref=branch).decoded_content.decode("utf-8")
+            readme = readme[:2000]
+            break
+        except GithubException:
+            pass
+
+    dir_listing = ""
+    try:
+        contents = repo.get_contents("", ref=branch)
+        dir_listing = "\n".join(
+            f"{'/' if c.type == 'dir' else ' '}{c.name}"
+            for c in sorted(contents, key=lambda c: (c.type != "dir", c.name))
+        )
+    except GithubException:
+        pass
+
+    return {"go_mod": go_mod, "readme": readme, "dir_listing": dir_listing}
+
+
+def get_pr_body(repo_slug: str, pr_number: int, settings: GitHubAgentSettings) -> str:
+    gh = _connect(settings)
+    pr: GHPullRequest = gh.get_repo(repo_slug).get_pull(pr_number)
+    return pr.body or ""
+
+
+def update_pr_body(repo_slug: str, pr_number: int, body: str, settings: GitHubAgentSettings) -> None:
+    gh = _connect(settings)
+    pr: GHPullRequest = gh.get_repo(repo_slug).get_pull(pr_number)
+    pr.edit(body=body)
+
+
+def post_issue_comment(repo_slug: str, pr_number: int, body: str, settings: GitHubAgentSettings) -> None:
+    gh = _connect(settings)
+    gh.get_repo(repo_slug).get_issue(pr_number).create_comment(body)
 
 
 def get_pr_state(repo_slug: str, pr_number: int, settings: GitHubAgentSettings) -> dict:

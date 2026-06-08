@@ -8,26 +8,37 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from agents.common.models import (
+        CodeGenerationResult,
         CreatePRInput,
         CreatedPR,
+        FeatureImplementationResult,
         OpenShiftFeaturePlan,
+        PRStep,
+        RepoPRBundle,
         ReviewResult,
         StagingPlan,
         StagingRepo,
     )
     from agents.github_agent.activities import (
+        apply_file_changes,
         create_feature_branch,
         create_pr,
         create_staging_pr,
         fetch_pr,
+        fetch_repo_context,
         fork_repository,
+        generate_code_for_bundle,
         poll_pr_for_label_drop,
         post_comments,
+        post_pr_comment,
         process_pr_comments,
+        remove_agent_hold,
         reset_agent_hold_label,
         run_review,
         store_created_pr,
+        store_implementation_result,
         store_review,
+        update_pr_description,
     )
 
 _STANDARD_RETRY = RetryPolicy(
@@ -177,6 +188,31 @@ class SetupStagingReposWorkflow:
 
 
 @workflow.defn
+class ForkReposWorkflow:
+    """Forks a list of repo slugs into a staging org concurrently."""
+
+    @workflow.run
+    async def run(self, repo_slugs: list[str], staging_org: str) -> list[StagingRepo]:
+        workflow.logger.info(
+            "ForkReposWorkflow: forking %d repos into %s",
+            len(repo_slugs), staging_org,
+        )
+        staging_repos: list[StagingRepo] = list(
+            await asyncio.gather(*[
+                workflow.execute_activity(
+                    fork_repository,
+                    args=[slug, staging_org],
+                    start_to_close_timeout=timedelta(seconds=60),
+                    retry_policy=_STANDARD_RETRY,
+                )
+                for slug in repo_slugs
+            ])
+        )
+        workflow.logger.info("ForkReposWorkflow: forked %d repos", len(staging_repos))
+        return staging_repos
+
+
+@workflow.defn
 class MonitorPRWorkflow:
     """Long-running per-repo workflow; processes PR comments when agent-hold is dropped."""
 
@@ -204,7 +240,7 @@ class MonitorPRWorkflow:
                     "agent-hold dropped on %s#%d; processing %d comments",
                     source_slug, staging_repo.pr_number, len(event.new_comments),
                 )
-                response = await workflow.execute_activity(
+                result = await workflow.execute_activity(
                     process_pr_comments,
                     args=[staging_repo, event.new_comments],
                     start_to_close_timeout=timedelta(minutes=10),
@@ -215,7 +251,24 @@ class MonitorPRWorkflow:
                         non_retryable_error_types=["ValueError"],
                     ),
                 )
-                workflow.logger.info("Comment response generated (%d chars)", len(response))
+                workflow.logger.info(
+                    "Comment processing complete: %d file changes", len(result.file_changes)
+                )
+
+                if result.file_changes:
+                    await workflow.execute_activity(
+                        apply_file_changes,
+                        args=[staging_repo, result.file_changes],
+                        start_to_close_timeout=timedelta(minutes=5),
+                        retry_policy=_STANDARD_RETRY,
+                    )
+
+                await workflow.execute_activity(
+                    post_pr_comment,
+                    args=[staging_repo, result.response_body],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_STANDARD_RETRY,
+                )
 
                 await workflow.execute_activity(
                     reset_agent_hold_label,
@@ -225,3 +278,196 @@ class MonitorPRWorkflow:
                 )
 
             await asyncio.sleep(_POLL_INTERVAL.total_seconds())
+
+
+# ── Code generation helpers ───────────────────────────────────────────────────
+
+_RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def _group_steps_by_repo(plan: "OpenShiftFeaturePlan") -> "list[RepoPRBundle]":
+    """Group all PRSteps by repo, deriving risk, CI requirements, and cross-repo blockers."""
+    from collections import defaultdict  # noqa: PLC0415
+
+    step_to_repo: dict[int, str] = {s.step: s.repo for s in plan.pr_sequence}
+
+    groups: dict[str, list[PRStep]] = defaultdict(list)
+    for step in plan.pr_sequence:
+        groups[step.repo].append(step)
+
+    bundles: list[RepoPRBundle] = []
+    for repo, steps in groups.items():
+        blocked_by_repos: list[str] = []
+        for step in steps:
+            if step.blocked_by_step is not None:
+                blocking_repo = step_to_repo.get(step.blocked_by_step)
+                if blocking_repo and blocking_repo != repo and blocking_repo not in blocked_by_repos:
+                    blocked_by_repos.append(blocking_repo)
+
+        max_risk = max(steps, key=lambda s: _RISK_ORDER[s.risk]).risk
+
+        seen_reqs: set[str] = set()
+        ci_requirements: list[str] = []
+        for step in steps:
+            for req in step.ci_requirements:
+                if req not in seen_reqs:
+                    ci_requirements.append(req)
+                    seen_reqs.add(req)
+
+        bundles.append(RepoPRBundle(
+            repo=repo,
+            tier=steps[0].tier,
+            steps=sorted(steps, key=lambda s: s.step),
+            risk=max_risk,
+            ci_requirements=ci_requirements,
+            blocked_by_repos=blocked_by_repos,
+        ))
+
+    return bundles
+
+
+# ── CodeGenerationWorkflow ────────────────────────────────────────────────────
+
+@workflow.defn
+class CodeGenerationWorkflow:
+    """Generates and commits all code changes for a single repo, then updates the PR."""
+
+    @workflow.run
+    async def run(
+        self,
+        staging_repo: "StagingRepo",
+        bundle: "RepoPRBundle",
+        feature_description: str,
+    ) -> "CodeGenerationResult":
+        source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
+        workflow.logger.info("CodeGenerationWorkflow: generating code for %s", source_slug)
+
+        repo_context = await workflow.execute_activity(
+            fetch_repo_context,
+            args=[staging_repo.source_org, staging_repo.source_repo, "main"],
+            start_to_close_timeout=timedelta(seconds=60),
+            retry_policy=_STANDARD_RETRY,
+        )
+
+        file_changes = await workflow.execute_activity(
+            generate_code_for_bundle,
+            args=[bundle, feature_description, repo_context],
+            start_to_close_timeout=timedelta(minutes=10),
+            retry_policy=_LLM_RETRY,
+        )
+
+        if file_changes:
+            await workflow.execute_activity(
+                apply_file_changes,
+                args=[staging_repo, file_changes],
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=_STANDARD_RETRY,
+            )
+
+        result = CodeGenerationResult(
+            repo=bundle.repo,
+            files_changed=[fc.path for fc in file_changes],
+            commit_messages=[fc.commit_message for fc in file_changes],
+        )
+
+        await workflow.execute_activity(
+            update_pr_description,
+            args=[staging_repo, result],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=_STANDARD_RETRY,
+        )
+
+        await workflow.execute_activity(
+            remove_agent_hold,
+            staging_repo,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=_STANDARD_RETRY,
+        )
+
+        workflow.logger.info(
+            "CodeGenerationWorkflow: done for %s; %d files changed",
+            source_slug, len(file_changes),
+        )
+        return result
+
+
+# ── ImplementFeatureWorkflow ──────────────────────────────────────────────────
+
+@workflow.defn
+class ImplementFeatureWorkflow:
+    """Orchestrates code generation across all repos for a feature, one PR per repo."""
+
+    @workflow.run
+    async def run(
+        self,
+        staging_plan: "StagingPlan",
+        feature_plan: "OpenShiftFeaturePlan",
+        feature_description: str,
+        run_id: str,
+    ) -> "FeatureImplementationResult":
+        workflow.logger.info(
+            "ImplementFeatureWorkflow: %s across %d repos",
+            staging_plan.feature_id, len(staging_plan.repos),
+        )
+
+        bundles = _group_steps_by_repo(feature_plan)
+
+        staging_by_repo: dict[str, StagingRepo] = {
+            f"{sr.source_org}/{sr.source_repo}": sr
+            for sr in staging_plan.repos
+        }
+
+        completed_repos: set[str] = set()
+        all_results: list[CodeGenerationResult] = []
+
+        while len(completed_repos) < len(bundles):
+            ready = [
+                b for b in bundles
+                if b.repo not in completed_repos
+                and b.repo in staging_by_repo
+                and all(dep in completed_repos for dep in b.blocked_by_repos)
+            ]
+
+            if not ready:
+                # Skip bundles with no staging repo (not in staging plan)
+                unblocked_missing = [
+                    b for b in bundles
+                    if b.repo not in completed_repos and b.repo not in staging_by_repo
+                ]
+                completed_repos.update(b.repo for b in unblocked_missing)
+                if len(completed_repos) >= len(bundles):
+                    break
+                raise workflow.NondeterminismError(
+                    "Deadlock: no ready bundle and all remaining repos have blockers"
+                )
+
+            wave_tasks = [
+                workflow.execute_child_workflow(
+                    CodeGenerationWorkflow.run,
+                    args=[staging_by_repo[b.repo], b, feature_description],
+                    id=f"{workflow.info().workflow_id}-codegen-{b.repo.replace('/', '-')}",
+                    task_queue="github-agent",
+                    execution_timeout=timedelta(hours=1),
+                )
+                for b in ready
+            ]
+            wave_results: list[CodeGenerationResult] = list(await asyncio.gather(*wave_tasks))
+            all_results.extend(wave_results)
+            completed_repos.update(b.repo for b in ready)
+
+        result = FeatureImplementationResult(
+            feature_id=staging_plan.feature_id,
+            results=all_results,
+        )
+        artifact_ref = await workflow.execute_activity(
+            store_implementation_result,
+            args=[result, run_id],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=_STANDARD_RETRY,
+        )
+        result.artifact_ref = artifact_ref
+
+        workflow.logger.info(
+            "ImplementFeatureWorkflow complete: %d repos implemented", len(all_results)
+        )
+        return result

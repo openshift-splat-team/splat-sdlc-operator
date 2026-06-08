@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-import pydantic
+import asyncio
 from pydantic import BaseModel
 from temporalio import activity
 
 from agents.common import llm, prompts, storage
 from agents.common.models import (
+    CodeGenerationResult,
+    CommentProcessingResult,
     CreatePRInput,
     CreatedPR,
+    FeatureImplementationResult,
+    FileChange,
     InlineComment,
     PRData,
     PRMonitorEvent,
+    RepoPRBundle,
     ReviewResult,
     StagingRepo,
 )
@@ -98,15 +103,20 @@ async def store_created_pr(pr: CreatedPR, run_id: str) -> str:
 @activity.defn
 async def fork_repository(source_slug: str, staging_org: str) -> StagingRepo:
     settings = GitHubAgentSettings()
+    if "/" not in source_slug:
+        source_slug = f"openshift/{source_slug}"
     activity.logger.info("Forking %s into %s", source_slug, staging_org)
     source_org, source_repo = source_slug.split("/", 1)
     fork_slug = github_client.fork_repo(source_slug, staging_org, settings)
+    from urllib.parse import urlparse  # noqa: PLC0415
+    parsed = urlparse(settings.github_base_url)
+    web_base = f"{parsed.scheme}://{parsed.netloc}"
     return StagingRepo(
         source_org=source_org,
         source_repo=source_repo,
         staging_org=staging_org,
         staging_repo=fork_slug.split("/")[-1],
-        fork_url=f"https://github.com/{fork_slug}",
+        fork_url=f"{web_base}/{fork_slug}",
     )
 
 
@@ -189,22 +199,59 @@ async def poll_pr_for_label_drop(staging_repo: StagingRepo) -> PRMonitorEvent:
 
 
 @activity.defn
-async def process_pr_comments(staging_repo: StagingRepo, comments: list[str]) -> str:
+async def process_pr_comments(staging_repo: StagingRepo, comments: list[str]) -> CommentProcessingResult:
     settings = GitHubAgentSettings()
     source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
     activity.logger.info("Processing %d comments on %s#%d", len(comments), source_slug, staging_repo.pr_number)
 
-    class _Response(pydantic.BaseModel):
-        response_body: str
+    pr_data = github_client.fetch_pr(staging_repo.pr_url, settings)
+
+    files_with_content = []
+    for pr_file in pr_data.files:
+        try:
+            content = github_client.get_file_content(fork_slug, pr_file.filename, staging_repo.feature_branch, settings)
+            files_with_content.append({"path": pr_file.filename, "content": content})
+        except Exception:
+            activity.logger.warning("Could not fetch content for %s; skipping", pr_file.filename)
 
     messages = prompts.render(
         "github_agent/process_comments.md",
         pr_url=staging_repo.pr_url,
         repo=source_slug,
+        feature_branch=staging_repo.feature_branch,
+        files=files_with_content,
         comments=comments,
     )
-    result = await llm.complete_structured(messages, settings, _Response)
-    return result.response_body
+    return await llm.complete_structured(messages, settings, CommentProcessingResult)
+
+
+@activity.defn
+async def apply_file_changes(staging_repo: StagingRepo, file_changes: list[FileChange]) -> None:
+    settings = GitHubAgentSettings()
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    activity.logger.info(
+        "Applying %d file changes to %s on branch %s",
+        len(file_changes), fork_slug, staging_repo.feature_branch,
+    )
+    for change in file_changes:
+        github_client.push_file_change(
+            fork_slug,
+            staging_repo.feature_branch,
+            change.path,
+            change.content,
+            change.commit_message,
+            settings,
+        )
+        activity.logger.info("Pushed change to %s", change.path)
+
+
+@activity.defn
+async def post_pr_comment(staging_repo: StagingRepo, body: str) -> None:
+    settings = GitHubAgentSettings()
+    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
+    activity.logger.info("Posting comment on %s#%d", source_slug, staging_repo.pr_number)
+    github_client.post_issue_comment(source_slug, staging_repo.pr_number, body, settings)
 
 
 @activity.defn
@@ -213,3 +260,75 @@ async def reset_agent_hold_label(staging_repo: StagingRepo) -> None:
     source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
     activity.logger.info("Resetting agent-hold label on %s#%d", source_slug, staging_repo.pr_number)
     github_client.add_label(source_slug, staging_repo.pr_number, "agent-hold", settings)
+
+
+# ── Code generation activities ────────────────────────────────────────────────
+
+@activity.defn
+async def fetch_repo_context(source_org: str, source_repo: str, branch: str) -> dict:
+    settings = GitHubAgentSettings()
+    source_slug = f"{source_org}/{source_repo}"
+    activity.logger.info("Fetching repo context for %s@%s", source_slug, branch)
+    return github_client.get_repo_context(source_slug, branch, settings)
+
+
+@activity.defn
+async def generate_code_for_bundle(
+    bundle: RepoPRBundle,
+    feature_description: str,
+    repo_context: dict,
+) -> list[FileChange]:
+    settings = GitHubAgentSettings()
+    activity.logger.info(
+        "Generating code for %s (%d steps)", bundle.repo, len(bundle.steps)
+    )
+
+    messages = prompts.render(
+        "github_agent/generate_code.md",
+        repo=bundle.repo,
+        tier=bundle.tier,
+        steps=bundle.steps,
+        feature_description=feature_description,
+        repo_context=repo_context,
+    )
+
+    class _CodeGenResponse(BaseModel):
+        file_changes: list[FileChange]
+
+    result = await llm.complete_structured(messages, settings, _CodeGenResponse)
+    return result.file_changes
+
+
+@activity.defn
+async def update_pr_description(staging_repo: StagingRepo, result: CodeGenerationResult) -> None:
+    settings = GitHubAgentSettings()
+    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
+    activity.logger.info("Updating PR description on %s#%d", source_slug, staging_repo.pr_number)
+
+    summary = "\n\n## Implementation Summary\n\n"
+    summary += f"**Files changed ({len(result.files_changed)}):**\n"
+    for path in result.files_changed:
+        summary += f"- `{path}`\n"
+    if result.commit_messages:
+        summary += "\n**Commits:**\n"
+        for msg in result.commit_messages:
+            summary += f"- {msg}\n"
+
+    current_body = github_client.get_pr_body(source_slug, staging_repo.pr_number, settings)
+    github_client.update_pr_body(source_slug, staging_repo.pr_number, current_body + summary, settings)
+
+
+@activity.defn
+async def remove_agent_hold(staging_repo: StagingRepo) -> None:
+    settings = GitHubAgentSettings()
+    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
+    activity.logger.info("Removing agent-hold from %s#%d", source_slug, staging_repo.pr_number)
+    github_client.remove_label(source_slug, staging_repo.pr_number, "agent-hold", settings)
+
+
+@activity.defn
+async def store_implementation_result(result: FeatureImplementationResult, run_id: str) -> str:
+    settings = GitHubAgentSettings()
+    key = f"runs/{run_id}/impl-result.json"
+    activity.logger.info("Storing implementation result to MinIO key %s", key)
+    return storage.put_artifact(key, result, settings)
