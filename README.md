@@ -16,7 +16,12 @@ Trigger (CLI / future: webhook)
         │     ├── StoryRefinementWorkflow              [jira-agent]       propose stories, iterate with humans
         │     ├── CreateStoriesWorkflow                [jira-agent]       create, size, prioritize, link stories
         │     ├── SetupStagingReposWorkflow            [github-agent]     fork repos, create branches & PRs
+        │     ├── ImplementFeatureWorkflow              [github-agent]     LLM code gen per repo in dependency order
+        │     │     └── CodeGenerationWorkflow (×N)     [github-agent]     generate + commit code for one repo
         │     └── MonitorPRWorkflow (×N)               [github-agent]     watch agent-hold label, process comments
+        │
+        ├── EnhancementReviewWorkflow                 review & revise enhancement doc from PR comments
+        │     load artifacts → fetch PR comments → LLM revises doc → commit & respond
         │
         ├── RequirementsWorkflow  [requirements-agent]
         │     fetch_jira_epic → produce_spec (LLM) → store to MinIO
@@ -60,15 +65,18 @@ flowchart TD
 
     F --> G["**Phase G** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nFork to staging org — sync main if exists\nCreate feature branch\nOpen draft PR → add agent-hold label"]
 
-    G --> H{{"⏸ **Phase H** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
+    G --> H["**Phase H** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nLLM generates code changes\nCommit to feature branches\nRespects dependency order"]
 
-    H -- agent-hold dropped --> HC["LLM processes review comments\nPost response → re-add agent-hold"]
-    HC --> H
-    H -- PR merged/closed --> DONE([Done])
+    H --> I{{"⏸ **Phase I** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
+
+    I -- agent-hold dropped --> IC["LLM processes review comments\nApply file changes · post response\nRe-add agent-hold"]
+    IC --> I
+    I -- PR merged/closed --> DONE([Done])
 
     style D fill:#fff3cd,stroke:#856404,color:#000
     style EG fill:#fff3cd,stroke:#856404,color:#000
-    style H fill:#fff3cd,stroke:#856404,color:#000
+    style H fill:#e8f4f8,stroke:#0969da,color:#000
+    style I fill:#fff3cd,stroke:#856404,color:#000
     style ABORT fill:#f8d7da,stroke:#842029,color:#000
     style DONE fill:#d1e7dd,stroke:#0f5132,color:#000
 ```
@@ -195,20 +203,64 @@ flowchart TD
 
     F --> G["**Phase G** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nFork to staging org — sync main if exists\nCreate feature branch\nOpen draft PR → add agent-hold label"]
 
-    G --> H{{"⏸ **Phase H** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
+    G --> H["**Phase H** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nLLM generates code changes\nCommit to feature branches\nRespects dependency order"]
 
-    H -- agent-hold dropped --> HC["LLM processes review comments\nPost response → re-add agent-hold"]
-    HC --> H
-    H -- PR merged/closed --> DONE([Done])
+    H --> I{{"⏸ **Phase I** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
+
+    I -- agent-hold dropped --> IC["LLM processes review comments\nApply file changes · post response\nRe-add agent-hold"]
+    IC --> I
+    I -- PR merged/closed --> DONE([Done])
 
     style D fill:#fff3cd,stroke:#856404,color:#000
     style EG fill:#fff3cd,stroke:#856404,color:#000
-    style H fill:#fff3cd,stroke:#856404,color:#000
+    style H fill:#e8f4f8,stroke:#0969da,color:#000
+    style I fill:#fff3cd,stroke:#856404,color:#000
     style ABORT fill:#f8d7da,stroke:#842029,color:#000
     style DONE fill:#d1e7dd,stroke:#0f5132,color:#000
 ```
 
 Human approval gates (yellow diamonds) are implemented as Temporal polling loops — workers are never blocked; the workflow sleeps between polls and resumes durably across restarts.
+
+---
+
+### `enhancement_review`
+
+Re-runs the enhancement review cycle on an existing enhancement PR. Loads the enhancement doc and feature plan from a previous `full_sdlc` run, fetches new PR review comments, uses an LLM to revise the document, commits the update, and posts a response addressing each reviewer comment.
+
+```mermaid
+flowchart LR
+    IN(["Source run ID\nJira epic key"]) --> A
+
+    A["load artifacts\n───────────────\norchestrator\nLoad enhancement doc,\nfeature plan, and\nstaging plan from MinIO"]
+
+    A --> B["EnhancementReviewWorkflow\n───────────────\nenhancement-agent\nFetch PR comments\nLLM revises document\nCommit updated doc\nPost response on PR"]
+
+    B --> OUT([Updated enhancement PR])
+
+    style B fill:#e8f4f8,stroke:#0969da,color:#000
+```
+
+---
+
+### `implement_feature`
+
+Takes the staging plan and feature plan from a previous `full_sdlc` run and generates code changes for each repository. Repos are processed in dependency order — a repo blocked by another waits until the dependency completes.
+
+```mermaid
+flowchart LR
+    IN(["Source run ID\nFeature description"]) --> A
+
+    A["load artifacts\n───────────────\norchestrator\nLoad staging plan\nand feature plan\nfrom MinIO"]
+
+    A --> B["ImplementFeatureWorkflow\n───────────────\ngithub-agent\nGroup PR steps by repo\nProcess in dependency order"]
+
+    B --> C["CodeGenerationWorkflow ×N\n───────────────\ngithub-agent · LLM\nFetch repo context\nGenerate file changes\nCommit to feature branch\nRemove agent-hold label"]
+
+    C --> OUT([FeatureImplementationResult\nin MinIO])
+
+    style B fill:#e8f4f8,stroke:#0969da,color:#000
+    style C fill:#e8f4f8,stroke:#0969da,color:#000
+```
 
 ---
 
@@ -273,7 +325,7 @@ See `.env.example` for alternative LLM providers (OpenAI, Anthropic, Azure) and 
 make dev
 ```
 
-This starts PostgreSQL (Temporal backend), Temporal, MinIO, Ollama, pulls the configured model, Gitea, then starts all workers. First run takes a few minutes while Ollama downloads the model.
+This starts PostgreSQL (Temporal backend), Temporal, MinIO, Ollama, pulls the configured model, Gitea, the dep-tree MCP server, then starts all workers. First run takes a few minutes while Ollama downloads the model. Temporal DB and MinIO data are persisted via named volumes across restarts.
 
 ```
   Temporal UI:        http://localhost:8233
@@ -315,7 +367,7 @@ For a full end-to-end SDLC run, select `full_sdlc` and provide:
 make dev-down
 ```
 
-The `ollama-data` volume persists the downloaded model so subsequent `make dev` starts are fast.
+Named volumes (`ollama-data`, `temporal-db-data`, `minio-data`) persist data across restarts so subsequent `make dev` starts are fast and workflow state is preserved.
 
 ---
 
@@ -389,10 +441,17 @@ Gitea provides a GitHub-compatible REST API and web UI. Point the agents at it i
 After `make dev`, run:
 
 ```bash
-make gitea-setup
+make gitea-setup        # create admin user, API token, and staging org
+make gitea-seed-repos   # create source repos the workflows fork/PR against
 ```
 
-This creates the `gitea` admin user, generates an API token, and creates a `staging` organisation. The token is saved inside the Gitea data volume.
+Optionally create a `reviewer` user for manual PR reviews:
+
+```bash
+make gitea-reviewer     # login: reviewer / reviewer123
+```
+
+The token is saved inside the Gitea data volume:
 
 ```bash
 make gitea-token     # print the generated API token
@@ -521,7 +580,13 @@ The openshift-agent uses an external [MCP](https://modelcontextprotocol.io/) ser
 
 ### Configuration
 
-The MCP server runs as a stdio subprocess spawned by the openshift-agent worker. Set these env vars:
+**SSE transport (preferred)** — the `dep-tree` container runs automatically with `make dev`. Set:
+
+```bash
+MCP_SERVER_URL=http://localhost:8000/sse   # compose sets this to http://dep-tree:8000/sse for workers
+```
+
+**Stdio transport (fallback)** — spawns a subprocess directly:
 
 ```bash
 MCP_SERVER_SCRIPT=/absolute/path/to/openshift-dep-tree/mcp_server.py   # required
@@ -529,6 +594,22 @@ MCP_SERVER_SCRIPT=/absolute/path/to/openshift-dep-tree/mcp_server.py   # require
 ```
 
 The `identify_affected_repos` activity calls `feature_impact_tool` with the Jira feature description, feeds the scored results to the LLM for final selection, and drops any LLM-hallucinated repos not present in the MCP dataset. The `analyze_feature` activity enriches the plan with per-repo dependency data from `get_repo_dependencies`.
+
+---
+
+## Agent memory
+
+Agents can save and recall observations across workflow runs using a MinIO-backed memory system. Memories are keyed by agent name and categorized as `reviewer_preference`, `architectural_decision`, `observation`, or `process_note`.
+
+The orchestrator worker registers three Temporal activities:
+
+| Activity | Purpose |
+|---|---|
+| `save_memory_entry` | Persist a single observation to the agent's memory index |
+| `recall_agent_memories` | Retrieve memories filtered by agent, category, and/or tags |
+| `extract_observations` | LLM-powered extraction of reusable observations from a completed workflow run |
+
+Recalled memories are formatted as a prompt section and injected into LLM calls so agents can learn from prior runs (e.g. reviewer preferences discovered during enhancement review cycles).
 
 ---
 
@@ -571,11 +652,14 @@ make test            # unit tests (no cluster needed)
 make lint            # ruff + mypy
 make fmt             # auto-format
 make dev-logs        # tail all compose service logs
+make dev-reload      # restart all worker containers (picks up code changes)
+make dev-rebuild     # rebuild and restart workers (after pyproject.toml/uv.lock changes)
+make dev-restart W=github-agent  # restart a single worker
 make jira-seed       # import test_data/*.xlsx into the local Jira simulator
 make jira-seed-force # re-import, overwriting existing data
 ```
 
-Code changes to `agents/` and `prompts/` are picked up immediately by running workers (volume-mounted in compose). Dependency changes (`pyproject.toml`) require `make dev-build` to rebuild the image.
+Code changes to `agents/` and `prompts/` are picked up immediately by running workers (volume-mounted in compose). Use `make dev-reload` to restart workers if needed. Dependency changes (`pyproject.toml`) require `make dev-rebuild`.
 
 ---
 
@@ -601,6 +685,7 @@ All config is via environment variables (`.env` for local dev, k8s Secrets for i
 | `LLM_API_BASE` | LLM API base URL — set in `.env` to point at any server; defaults to local Ollama (`http://ollama:11434`) |
 | `GITHUB_TOKEN` | GitHub PAT with `repo` scope — or Gitea API token when using the local simulator |
 | `GITHUB_BASE_URL` | GitHub API base URL; set to `http://localhost:3000/api/v1` to use local Gitea (default: `https://api.github.com`) |
+| `GITHUB_BOT_USER` | Username the bot posts as; its comments are excluded from reviewer feedback (default: `gitea`) |
 | `STAGING_GITHUB_ORG` | GitHub/Gitea org where repository forks are created |
 | `JIRA_URL` / `JIRA_USER` / `JIRA_TOKEN` | Jira credentials (requirements-agent, jira-agent) |
 | `JIRA_PROJECT_KEY` | Project key for the local Jira simulator — issue keys will be `{KEY}-N` (e.g. `SDLC`) |
@@ -608,8 +693,10 @@ All config is via environment variables (`.env` for local dev, k8s Secrets for i
 | `VERTEX_PROJECT` | GCP project ID for Vertex AI (e.g. `my-gcp-project`) |
 | `VERTEX_LOCATION` | Vertex AI region (e.g. `us-central1`); authentication uses ADC (`gcloud auth application-default login`) or `GOOGLE_APPLICATION_CREDENTIALS` |
 | `LLM_CONFIG_PATH` | Path to a YAML file with per-agent LLM overrides (see [Per-agent LLM configuration](#per-agent-llm-configuration)) |
-| `MCP_SERVER_SCRIPT` | Absolute path to `openshift-dep-tree` `mcp_server.py` — required for the openshift-agent (see [OpenShift dep-tree MCP server](#openshift-dep-tree-mcp-server)) |
+| `MCP_SERVER_URL` | SSE URL for the openshift-dep-tree MCP server (e.g. `http://dep-tree:8000/sse`); preferred over stdio — see [OpenShift dep-tree MCP server](#openshift-dep-tree-mcp-server) |
+| `MCP_SERVER_SCRIPT` | Absolute path to `openshift-dep-tree` `mcp_server.py` — stdio fallback when `MCP_SERVER_URL` is not set |
 | `MCP_DATA_DIR` | Override the data directory for the MCP server; defaults to the script's own directory |
+| `GOOGLE_APPLICATION_CREDENTIALS_FILE` | Path to GCP service account JSON; mounted into containers for Vertex AI authentication |
 | `MINIO_ENDPOINT` | MinIO API address |
 
 ## Troubleshooting
