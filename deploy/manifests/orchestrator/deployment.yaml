@@ -21,13 +21,13 @@ spec:
               value: "temporal-frontend:7233"
             - name: TEMPORAL_TASK_QUEUE
               value: "orchestrator"
-            - name: MINIO_ENDPOINT
-              value: "minio:9000"
+            - name: S3_ENDPOINT
+              value: "rustfs:9000"
             - name: LLM_API_BASE
               value: "http://ollama.sdlc.svc.cluster.local:11434"
           envFrom:
             - secretRef:
-                name: minio-credentials
+                name: s3-credentials
             - secretRef:
                 name: llm-credentials
           resources:

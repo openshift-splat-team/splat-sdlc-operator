@@ -17,7 +17,7 @@ spec:
     - ports:
         - port: 7233
           protocol: TCP
-    # MinIO
+    # RustFS
     - ports:
         - port: 9000
           protocol: TCP

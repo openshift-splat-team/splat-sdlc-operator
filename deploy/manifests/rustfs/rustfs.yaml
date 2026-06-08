@@ -1,26 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: minio
+  name: rustfs
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: minio
+      app: rustfs
   template:
     metadata:
       labels:
-        app: minio
+        app: rustfs
     spec:
       containers:
-        - name: minio
-          image: minio/minio:latest
-          args: ["server", "/data", "--console-address", ":9001"]
+        - name: rustfs
+          image: rustfs/rustfs:latest
+          args: ["rustfs", "server", "/data", "--console-address", ":9001"]
           env:
-            - name: MINIO_ROOT_USER
-              value: minioadmin
-            - name: MINIO_ROOT_PASSWORD
-              value: minioadmin
+            - name: RUSTFS_ROOT_USER
+              value: rustfsadmin
+            - name: RUSTFS_ROOT_PASSWORD
+              value: rustfsadmin
           ports:
             - containerPort: 9000
             - containerPort: 9001
@@ -47,10 +47,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: minio
+  name: rustfs
 spec:
   selector:
-    app: minio
+    app: rustfs
   ports:
     - name: api
       port: 9000

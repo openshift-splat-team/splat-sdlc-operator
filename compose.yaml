@@ -16,7 +16,7 @@ x-worker: &worker
   depends_on:
     temporal:
       condition: service_healthy
-    minio:
+    rustfs:
       condition: service_healthy
     ollama-pull:
       condition: service_completed_successfully
@@ -74,18 +74,18 @@ services:
       temporal:
         condition: service_healthy
 
-  # ── MinIO ───────────────────────────────────────────────────────────────────
-  minio:
-    image: docker.io/minio/minio:latest
-    command: server /data --console-address ":9001"
+  # ── RustFS (S3-compatible object store) ──────────────────────────────────────
+  rustfs:
+    image: docker.io/rustfs/rustfs:latest
+    command: rustfs server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      - RUSTFS_ROOT_USER=rustfsadmin
+      - RUSTFS_ROOT_PASSWORD=rustfsadmin
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio-data:/data:z
+      - rustfs-data:/data:z
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
       interval: 10s
@@ -164,7 +164,7 @@ services:
     environment:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=orchestrator
-      - MINIO_ENDPOINT=minio:9000
+      - S3_ENDPOINT=rustfs:9000
       - LLM_API_BASE=${LLM_API_BASE:-}
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
 
@@ -174,7 +174,7 @@ services:
     environment:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=requirements-agent
-      - MINIO_ENDPOINT=minio:9000
+      - S3_ENDPOINT=rustfs:9000
       - LLM_API_BASE=${LLM_API_BASE:-}
       - JIRA_URL=http://jira-simulator:8080
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
@@ -185,7 +185,7 @@ services:
     environment:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=github-agent
-      - MINIO_ENDPOINT=minio:9000
+      - S3_ENDPOINT=rustfs:9000
       - LLM_API_BASE=${LLM_API_BASE:-}
       - GITHUB_BASE_URL=http://gitea:3000/api/v1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
@@ -204,7 +204,7 @@ services:
     environment:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=openshift-agent
-      - MINIO_ENDPOINT=minio:9000
+      - S3_ENDPOINT=rustfs:9000
       - LLM_API_BASE=${LLM_API_BASE:-}
       - GITHUB_BASE_URL=http://gitea:3000/api/v1
       - MCP_SERVER_URL=http://dep-tree:8000/sse
@@ -219,7 +219,7 @@ services:
     environment:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=jira-agent
-      - MINIO_ENDPOINT=minio:9000
+      - S3_ENDPOINT=rustfs:9000
       - LLM_API_BASE=${LLM_API_BASE:-}
       - JIRA_URL=http://jira-simulator:8080
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
@@ -230,14 +230,14 @@ services:
     environment:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=enhancement-agent
-      - MINIO_ENDPOINT=minio:9000
+      - S3_ENDPOINT=rustfs:9000
       - LLM_API_BASE=${LLM_API_BASE:-}
       - GITHUB_BASE_URL=http://gitea:3000/api/v1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
 
 volumes:
   temporal-db-data:
-  minio-data:
+  rustfs-data:
   ollama-data:
   gitea-data:
   jira-data:

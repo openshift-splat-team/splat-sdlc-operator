@@ -75,7 +75,7 @@ async def post_comments(review: ReviewResult) -> None:
 async def store_review(review: ReviewResult, run_id: str) -> str:
     settings = GitHubAgentSettings()
     key = f"runs/{run_id}/review-result.json"
-    activity.logger.info("Storing review to MinIO key %s", key)
+    activity.logger.info("Storing review to S3 key %s", key)
     return storage.put_artifact(key, review, settings)
 
 
@@ -94,7 +94,7 @@ async def create_pr(input: CreatePRInput) -> CreatedPR:
 async def store_created_pr(pr: CreatedPR, run_id: str) -> str:
     settings = GitHubAgentSettings()
     key = f"runs/{run_id}/created-pr.json"
-    activity.logger.info("Storing created PR record to MinIO key %s", key)
+    activity.logger.info("Storing created PR record to S3 key %s", key)
     return storage.put_artifact(key, pr, settings)
 
 
@@ -330,5 +330,5 @@ async def remove_agent_hold(staging_repo: StagingRepo) -> None:
 async def store_implementation_result(result: FeatureImplementationResult, run_id: str) -> str:
     settings = GitHubAgentSettings()
     key = f"runs/{run_id}/impl-result.json"
-    activity.logger.info("Storing implementation result to MinIO key %s", key)
+    activity.logger.info("Storing implementation result to S3 key %s", key)
     return storage.put_artifact(key, result, settings)

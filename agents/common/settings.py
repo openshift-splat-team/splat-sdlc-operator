@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,11 +20,11 @@ class BaseAgentSettings(BaseSettings):
     vertex_project: str | None = Field(default=None, description="GCP project ID for Vertex AI (e.g. my-gcp-project)")
     vertex_location: str | None = Field(default=None, description="Vertex AI region (e.g. us-central1)")
 
-    minio_endpoint: str = "minio:9000"
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "minioadmin"
-    minio_bucket: str = "sdlc-artifacts"
-    minio_secure: bool = False
+    s3_endpoint: str = Field(default="rustfs:9000", validation_alias=AliasChoices("s3_endpoint", "minio_endpoint"))
+    s3_access_key: str = Field(default="rustfsadmin", validation_alias=AliasChoices("s3_access_key", "minio_access_key"))
+    s3_secret_key: str = Field(default="rustfsadmin", validation_alias=AliasChoices("s3_secret_key", "minio_secret_key"))
+    s3_bucket: str = Field(default="sdlc-artifacts", validation_alias=AliasChoices("s3_bucket", "minio_bucket"))
+    s3_secure: bool = Field(default=False, validation_alias=AliasChoices("s3_secure", "minio_secure"))
 
 
 class OrchestratorSettings(BaseAgentSettings):

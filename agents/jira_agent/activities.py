@@ -132,5 +132,5 @@ async def close_story_wont_do(story_key: str) -> None:
 async def store_story_plan(story_plan: StoryPlan, run_id: str) -> str:
     settings = JiraAgentSettings()
     key = f"runs/{run_id}/story-plan.json"
-    activity.logger.info("Storing story plan to MinIO key %s", key)
+    activity.logger.info("Storing story plan to S3 key %s", key)
     return storage.put_artifact(key, story_plan, settings)

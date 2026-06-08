@@ -1,4 +1,4 @@
-"""MinIO-backed artifact storage. Workflows pass object keys, not payloads."""
+"""S3-compatible artifact storage. Workflows pass object keys, not payloads."""
 from __future__ import annotations
 
 import io
@@ -12,10 +12,10 @@ from agents.common.settings import BaseAgentSettings
 
 def _client(settings: BaseAgentSettings) -> Minio:
     return Minio(
-        settings.minio_endpoint,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
-        secure=settings.minio_secure,
+        settings.s3_endpoint,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=settings.s3_secure,
     )
 
 
@@ -27,10 +27,10 @@ def _ensure_bucket(client: Minio, bucket: str) -> None:
 def put_artifact(key: str, artifact: BaseModel, settings: BaseAgentSettings) -> str:
     """Serialize artifact to JSON and store under key. Returns the key."""
     client = _client(settings)
-    _ensure_bucket(client, settings.minio_bucket)
+    _ensure_bucket(client, settings.s3_bucket)
     data = artifact.model_dump_json().encode()
     client.put_object(
-        settings.minio_bucket,
+        settings.s3_bucket,
         key,
         io.BytesIO(data),
         length=len(data),
@@ -40,9 +40,9 @@ def put_artifact(key: str, artifact: BaseModel, settings: BaseAgentSettings) -> 
 
 
 def get_artifact(key: str, model: type, settings: BaseAgentSettings) -> object:
-    """Fetch artifact JSON from MinIO and deserialize into model."""
+    """Fetch artifact JSON from S3 and deserialize into model."""
     client = _client(settings)
-    response = client.get_object(settings.minio_bucket, key)
+    response = client.get_object(settings.s3_bucket, key)
     try:
         raw = response.read()
     finally:

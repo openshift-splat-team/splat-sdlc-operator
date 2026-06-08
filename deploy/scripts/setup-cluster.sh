@@ -57,11 +57,11 @@ helm upgrade --install temporal temporalio/temporal \
   --wait
 ok "Temporal deployed."
 
-# ── MinIO ─────────────────────────────────────────────────────────────────────
-info "Deploying MinIO..."
-kubectl apply -f "${DEPLOY_DIR}/manifests/minio/" --namespace "${NAMESPACE}"
-kubectl rollout status deployment/minio -n "${NAMESPACE}" --timeout=90s
-ok "MinIO deployed."
+# ── RustFS (S3-compatible object store) ───────────────────────────────────────
+info "Deploying RustFS..."
+kubectl apply -f "${DEPLOY_DIR}/manifests/rustfs/" --namespace "${NAMESPACE}"
+kubectl rollout status deployment/rustfs -n "${NAMESPACE}" --timeout=90s
+ok "RustFS deployed."
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 info "Deploying Ollama (init container will pull the model on first start)..."
@@ -95,7 +95,7 @@ echo "======================================================================"
 echo "  Cluster '${CLUSTER_NAME}' is ready."
 echo ""
 echo "  Temporal UI:   http://localhost:8233"
-echo "  MinIO console: http://localhost:9001  (user: minioadmin / minioadmin)"
+echo "  RustFS console: http://localhost:9001  (user: rustfsadmin / rustfsadmin)"
 echo "  Temporal gRPC: localhost:7233"
 echo "  Ollama API:    http://localhost:11434  (model pull may still be in progress)"
 echo ""

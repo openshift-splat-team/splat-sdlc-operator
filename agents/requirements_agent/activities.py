@@ -44,7 +44,7 @@ async def produce_spec(epic: JiraEpic) -> RequirementSpec:
 async def store_spec(spec: RequirementSpec, run_id: str) -> str:
     settings = RequirementsAgentSettings()
     key = f"runs/{run_id}/requirement-spec.json"
-    activity.logger.info("Storing spec to MinIO key %s", key)
+    activity.logger.info("Storing spec to S3 key %s", key)
     return storage.put_artifact(key, spec, settings)
 
 

@@ -12,11 +12,11 @@ nodes:
       - containerPort: 8233
         hostPort: 8233
         protocol: TCP
-      # MinIO API
+      # RustFS API
       - containerPort: 9000
         hostPort: 9000
         protocol: TCP
-      # MinIO console
+      # RustFS console
       - containerPort: 9001
         hostPort: 9001
         protocol: TCP

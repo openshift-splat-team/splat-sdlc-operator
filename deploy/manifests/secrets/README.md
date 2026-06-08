@@ -24,12 +24,12 @@ kubectl create secret generic jira-credentials \
   --from-literal=JIRA_USER=user@example.com \
   --from-literal=JIRA_TOKEN=...
 
-# MinIO credentials (all agents — use defaults for local Kind dev)
-kubectl create secret generic minio-credentials \
+# S3 credentials (all agents — use defaults for local Kind dev)
+kubectl create secret generic s3-credentials \
   --namespace sdlc \
-  --from-literal=MINIO_ACCESS_KEY=minioadmin \
-  --from-literal=MINIO_SECRET_KEY=minioadmin \
-  --from-literal=MINIO_BUCKET=sdlc-artifacts
+  --from-literal=S3_ACCESS_KEY=rustfsadmin \
+  --from-literal=S3_SECRET_KEY=rustfsadmin \
+  --from-literal=S3_BUCKET=sdlc-artifacts
 ```
 
 Or use `make secrets-template` to print these commands with placeholder values.

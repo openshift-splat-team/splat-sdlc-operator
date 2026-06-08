@@ -134,5 +134,5 @@ async def fetch_repo_context(repo_name: str) -> dict:
 async def store_feature_plan(plan: OpenShiftFeaturePlan, run_id: str) -> str:
     settings = OpenShiftAgentSettings()
     key = f"runs/{run_id}/openshift-feature-plan.json"
-    activity.logger.info("Storing feature plan to MinIO key %s", key)
+    activity.logger.info("Storing feature plan to S3 key %s", key)
     return storage.put_artifact(key, plan, settings)

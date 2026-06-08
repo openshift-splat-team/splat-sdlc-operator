@@ -29,7 +29,7 @@ dev-logs:
 	$(COMPOSE) logs -f
 
 # Restart only the worker containers (picks up code changes via bind mounts).
-# Infrastructure (Temporal, MinIO, Gitea, Ollama) stays running.
+# Infrastructure (Temporal, RustFS, Gitea, Ollama) stays running.
 dev-reload:
 	$(COMPOSE) restart $(WORKERS)
 
@@ -188,7 +188,7 @@ push:
 
 deploy:
 	kubectl apply -f deploy/manifests/namespace.yaml
-	kubectl apply -f deploy/manifests/minio/ -n $(NAMESPACE)
+	kubectl apply -f deploy/manifests/rustfs/ -n $(NAMESPACE)
 	kubectl apply -f deploy/manifests/orchestrator/ -n $(NAMESPACE)
 	kubectl apply -f deploy/manifests/requirements-agent/ -n $(NAMESPACE)
 	kubectl apply -f deploy/manifests/github-agent/ -n $(NAMESPACE)
@@ -213,7 +213,7 @@ port-forward:
 	@echo "Starting port-forwards (Ctrl-C to stop)..."
 	kubectl port-forward -n $(NAMESPACE) svc/temporal-frontend 7233:7233 &
 	kubectl port-forward -n $(NAMESPACE) svc/temporal-web 8233:8233 &
-	kubectl port-forward -n $(NAMESPACE) svc/minio 9000:9000 9001:9001 &
+	kubectl port-forward -n $(NAMESPACE) svc/rustfs 9000:9000 9001:9001 &
 	@wait
 
 dev-orchestrator:
@@ -272,11 +272,11 @@ secrets-template:
 	@echo "  --from-literal=JIRA_USER=user@example.com \\"
 	@echo "  --from-literal=JIRA_TOKEN=..."
 	@echo ""
-	@echo "kubectl create secret generic minio-credentials \\"
+	@echo "kubectl create secret generic s3-credentials \\"
 	@echo "  --namespace $(NAMESPACE) \\"
-	@echo "  --from-literal=MINIO_ACCESS_KEY=minioadmin \\"
-	@echo "  --from-literal=MINIO_SECRET_KEY=minioadmin \\"
-	@echo "  --from-literal=MINIO_BUCKET=sdlc-artifacts"
+	@echo "  --from-literal=S3_ACCESS_KEY=rustfsadmin \\"
+	@echo "  --from-literal=S3_SECRET_KEY=rustfsadmin \\"
+	@echo "  --from-literal=S3_BUCKET=sdlc-artifacts"
 	@echo ""
 
 clean:

@@ -89,7 +89,7 @@ async def poll_enhancement_pr_state(repo_slug: str, pr_number: int) -> dict:
 async def store_enhancement_doc(doc: EnhancementDoc, run_id: str) -> str:
     settings = EnhancementAgentSettings()
     key = f"runs/{run_id}/enhancement-doc.json"
-    activity.logger.info("Storing enhancement doc to MinIO key %s", key)
+    activity.logger.info("Storing enhancement doc to S3 key %s", key)
     return storage.put_artifact(key, doc, settings)
 
 

@@ -338,8 +338,8 @@ class PRMonitorEvent(BaseModel):
 
 class ImplementFeatureInput(BaseModel):
     feature_id: str
-    staging_plan_ref: str = Field(..., description="MinIO artifact key for the StagingPlan")
-    feature_plan_ref: str = Field(..., description="MinIO artifact key for the OpenShiftFeaturePlan")
+    staging_plan_ref: str = Field(..., description="S3 artifact key for the StagingPlan")
+    feature_plan_ref: str = Field(..., description="S3 artifact key for the OpenShiftFeaturePlan")
     feature_description: str
 
 

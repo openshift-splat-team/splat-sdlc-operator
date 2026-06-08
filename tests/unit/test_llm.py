@@ -30,8 +30,8 @@ def _mock_response(content: str) -> MagicMock:
 def settings(monkeypatch):
     monkeypatch.setenv("TEMPORAL_TASK_QUEUE", "test")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
-    monkeypatch.setenv("MINIO_ACCESS_KEY", "minioadmin")
-    monkeypatch.setenv("MINIO_SECRET_KEY", "minioadmin")
+    monkeypatch.setenv("S3_ACCESS_KEY", "rustfsadmin")
+    monkeypatch.setenv("S3_SECRET_KEY", "rustfsadmin")
     return _Settings()
 
 

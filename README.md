@@ -24,13 +24,13 @@ Trigger (CLI / future: webhook)
         │     load artifacts → fetch PR comments → LLM revises doc → commit & respond
         │
         ├── RequirementsWorkflow  [requirements-agent]
-        │     fetch_jira_epic → produce_spec (LLM) → store to MinIO
+        │     fetch_jira_epic → produce_spec (LLM) → store to S3
         ├── ReviewWorkflow        [github-agent]
-        │     fetch_pr → run_review (LLM) → post_comments → store to MinIO
+        │     fetch_pr → run_review (LLM) → post_comments → store to S3
         ├── CreatePRWorkflow      [github-agent]
-        │     create_pr → store to MinIO
+        │     create_pr → store to S3
         └── OpenShiftFeatureWorkflow  [openshift-agent]
-              identify_repos (MCP + LLM) → fetch_context → analyze (MCP + LLM) → ci_requirements → store to MinIO
+              identify_repos (MCP + LLM) → fetch_context → analyze (MCP + LLM) → ci_requirements → store to S3
 ```
 
 LiteLLM abstracts all LLM calls — swap providers (OpenAI, Anthropic, Ollama, etc.) via the `LITELLM_MODEL` env var with no code changes.
@@ -87,7 +87,7 @@ Human approval gates (yellow diamonds) are implemented as Temporal polling loops
 
 ### `requirements`
 
-Fetches a Jira epic (by key or URL), aggregates its child stories and parent context, then uses an LLM to produce a structured requirement specification. The spec is stored as a JSON artifact in MinIO.
+Fetches a Jira epic (by key or URL), aggregates its child stories and parent context, then uses an LLM to produce a structured requirement specification. The spec is stored as a JSON artifact in S3.
 
 ```mermaid
 flowchart LR
@@ -97,9 +97,9 @@ flowchart LR
 
     A --> B["produce_spec\n───────────────\nrequirements-agent · LLM\nDecompose epic into stories\nwith acceptance criteria"]
 
-    B --> C["store_spec\n───────────────\nrequirements-agent\nSerialize to JSON\nStore in MinIO"]
+    B --> C["store_spec\n───────────────\nrequirements-agent\nSerialize to JSON\nStore in S3"]
 
-    C --> OUT([artifact ref in MinIO])
+    C --> OUT([artifact ref in S3])
 
     style B fill:#e8f4f8,stroke:#0969da,color:#000
 ```
@@ -120,9 +120,9 @@ flowchart LR
 
     B --> C["post_comments\n───────────────\ngithub-agent\nPost GitHub review\nwith inline comments"]
 
-    C --> D["store_review\n───────────────\ngithub-agent\nStore result\nin MinIO"]
+    C --> D["store_review\n───────────────\ngithub-agent\nStore result\nin S3"]
 
-    D --> OUT([artifact ref in MinIO])
+    D --> OUT([artifact ref in S3])
 
     style B fill:#e8f4f8,stroke:#0969da,color:#000
 ```
@@ -139,7 +139,7 @@ flowchart LR
 
     A["create_pr\n───────────────\ngithub-agent\nOpen PR on GitHub\nOptionally link Jira issue\nin title and body"]
 
-    A --> B["store_created_pr\n───────────────\ngithub-agent\nStore PR record\nin MinIO"]
+    A --> B["store_created_pr\n───────────────\ngithub-agent\nStore PR record\nin S3"]
 
     B --> OUT([PR URL + artifact ref])
 ```
@@ -162,9 +162,9 @@ flowchart LR
 
     C --> D["determine_ci_requirements\n───────────────\nopenshift-agent · LLM\nIdentify required presubmit\njobs and release config\nchanges per repo"]
 
-    D --> E["store_feature_plan\n───────────────\nopenshift-agent\nStore plan in MinIO"]
+    D --> E["store_feature_plan\n───────────────\nopenshift-agent\nStore plan in S3"]
 
-    E --> OUT([artifact ref in MinIO])
+    E --> OUT([artifact ref in S3])
 
     style A fill:#e8f4f8,stroke:#0969da,color:#000
     style C fill:#e8f4f8,stroke:#0969da,color:#000
@@ -231,7 +231,7 @@ Re-runs the enhancement review cycle on an existing enhancement PR. Loads the en
 flowchart LR
     IN(["Source run ID\nJira epic key"]) --> A
 
-    A["load artifacts\n───────────────\norchestrator\nLoad enhancement doc,\nfeature plan, and\nstaging plan from MinIO"]
+    A["load artifacts\n───────────────\norchestrator\nLoad enhancement doc,\nfeature plan, and\nstaging plan from S3"]
 
     A --> B["EnhancementReviewWorkflow\n───────────────\nenhancement-agent\nFetch PR comments\nLLM revises document\nCommit updated doc\nPost response on PR"]
 
@@ -250,13 +250,13 @@ Takes the staging plan and feature plan from a previous `full_sdlc` run and gene
 flowchart LR
     IN(["Source run ID\nFeature description"]) --> A
 
-    A["load artifacts\n───────────────\norchestrator\nLoad staging plan\nand feature plan\nfrom MinIO"]
+    A["load artifacts\n───────────────\norchestrator\nLoad staging plan\nand feature plan\nfrom S3"]
 
     A --> B["ImplementFeatureWorkflow\n───────────────\ngithub-agent\nGroup PR steps by repo\nProcess in dependency order"]
 
     B --> C["CodeGenerationWorkflow ×N\n───────────────\ngithub-agent · LLM\nFetch repo context\nGenerate file changes\nCommit to feature branch\nRemove agent-hold label"]
 
-    C --> OUT([FeatureImplementationResult\nin MinIO])
+    C --> OUT([FeatureImplementationResult\nin S3])
 
     style B fill:#e8f4f8,stroke:#0969da,color:#000
     style C fill:#e8f4f8,stroke:#0969da,color:#000
@@ -325,11 +325,11 @@ See `.env.example` for alternative LLM providers (OpenAI, Anthropic, Azure) and 
 make dev
 ```
 
-This starts PostgreSQL (Temporal backend), Temporal, MinIO, Ollama, pulls the configured model, Gitea, the dep-tree MCP server, then starts all workers. First run takes a few minutes while Ollama downloads the model. Temporal DB and MinIO data are persisted via named volumes across restarts.
+This starts PostgreSQL (Temporal backend), Temporal, RustFS, Ollama, pulls the configured model, Gitea, the dep-tree MCP server, then starts all workers. First run takes a few minutes while Ollama downloads the model. Temporal DB and RustFS data are persisted via named volumes across restarts.
 
 ```
   Temporal UI:        http://localhost:8233
-  MinIO console:      http://localhost:9001  (minioadmin / minioadmin)
+  RustFS console:     http://localhost:9001  (rustfsadmin / rustfsadmin)
   Ollama API:         http://localhost:11434
   Gitea UI:           http://localhost:3000  (gitea / gitea123)
   Jira simulator UI:  http://localhost:8080
@@ -367,7 +367,7 @@ For a full end-to-end SDLC run, select `full_sdlc` and provide:
 make dev-down
 ```
 
-Named volumes (`ollama-data`, `temporal-db-data`, `minio-data`) persist data across restarts so subsequent `make dev` starts are fast and workflow state is preserved.
+Named volumes (`ollama-data`, `temporal-db-data`, `rustfs-data`) persist data across restarts so subsequent `make dev` starts are fast and workflow state is preserved.
 
 ---
 
@@ -599,7 +599,7 @@ The `identify_affected_repos` activity calls `feature_impact_tool` with the Jira
 
 ## Agent memory
 
-Agents can save and recall observations across workflow runs using a MinIO-backed memory system. Memories are keyed by agent name and categorized as `reviewer_preference`, `architectural_decision`, `observation`, or `process_note`.
+Agents can save and recall observations across workflow runs using an S3-backed memory system. Memories are keyed by agent name and categorized as `reviewer_preference`, `architectural_decision`, `observation`, or `process_note`.
 
 The orchestrator worker registers three Temporal activities:
 
@@ -697,7 +697,7 @@ All config is via environment variables (`.env` for local dev, k8s Secrets for i
 | `MCP_SERVER_SCRIPT` | Absolute path to `openshift-dep-tree` `mcp_server.py` — stdio fallback when `MCP_SERVER_URL` is not set |
 | `MCP_DATA_DIR` | Override the data directory for the MCP server; defaults to the script's own directory |
 | `GOOGLE_APPLICATION_CREDENTIALS_FILE` | Path to GCP service account JSON; mounted into containers for Vertex AI authentication |
-| `MINIO_ENDPOINT` | MinIO API address |
+| `S3_ENDPOINT` | S3-compatible API address (RustFS in local dev) |
 
 ## Troubleshooting
 
