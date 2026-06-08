@@ -292,46 +292,7 @@ class FullSDLCWorkflow:
         )
         workflow.logger.info("Epic: %s", epic.key)
 
-        # Phase B — Analyze feature and identify affected repos
-        openshift_input = OpenShiftFeatureInput(
-            feature_description=feature_input.feature_description,
-            target_ocp_version=feature_input.target_ocp_version,
-            jira_epic_id=epic.key,
-            jira_context={
-                "epic_id": epic.key,
-                "title": epic.summary,
-                "stories": [
-                    {"title": s.summary, "description": s.description or ""}
-                    for s in epic.stories
-                ],
-            },
-        )
-        feature_plan_ref: str = await workflow.execute_child_workflow(
-            OpenShiftFeatureWorkflow.run,
-            args=[openshift_input, run_id],
-            id=f"{run_id}-openshift-feature",
-            task_queue="openshift-agent",
-            execution_timeout=timedelta(minutes=15),
-        )
-        # Load feature plan artifact — passed by ref; decode inline via activity is simplest
-        # For now pass openshift_input details forward; full plan loaded in Phase C
-        workflow.logger.info("Feature plan artifact: %s", feature_plan_ref)
-
-        # Phase C — Generate and submit enhancement PR
-        # We need the full OpenShiftFeaturePlan; fetch from storage via a lightweight activity
-        from agents.orchestrator.activities import load_feature_plan  # noqa: PLC0415
-
-        feature_plan = await workflow.execute_activity(
-            load_feature_plan,
-            feature_plan_ref,
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=2),
-                backoff_coefficient=2.0,
-                maximum_attempts=3,
-            ),
-        )
-
+        # Phase B — Generate enhancement doc and open PR (before feature plan)
         pr_input = EnhancementPRInput(
             repo=feature_input.enhancement_repo,
             base_branch="main",
@@ -340,14 +301,13 @@ class FullSDLCWorkflow:
 
         enhancement_pr = await workflow.execute_child_workflow(
             EnhancementWorkflow.run,
-            args=[epic, feature_plan, pr_input, feature_branch, feature_input.target_ocp_version, run_id],
+            args=[epic, pr_input, feature_branch, feature_input.target_ocp_version, run_id],
             id=f"{run_id}-enhancement",
             task_queue="enhancement-agent",
             execution_timeout=timedelta(minutes=15),
         )
         workflow.logger.info("Enhancement PR: %s", enhancement_pr.url)
 
-        # Create design doc review story
         design_story = await workflow.execute_child_workflow(
             CreateDesignDocStoryWorkflow.run,
             args=[epic.key, enhancement_pr.url],
@@ -356,13 +316,11 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(seconds=60),
         )
 
-        # Phase D — Wait for enhancement PR approval (or closure)
-        # Extract repo slug and PR number from URL
+        # Phase C — Wait for enhancement PR approval (or closure)
         url_parts = enhancement_pr.url.rstrip("/").split("/")
         enhancement_repo_slug = f"{url_parts[-4]}/{url_parts[-3]}"
         enhancement_pr_number = int(url_parts[-1])
 
-        # Load the enhancement doc and derive fork/feature slugs for comment processing
         from agents.orchestrator.activities import load_enhancement_doc  # noqa: PLC0415
 
         enhancement_doc_for_approval = await workflow.execute_activity(
@@ -387,7 +345,7 @@ class FullSDLCWorkflow:
             feature_slug=enhancement_feature_slug,
             enhancement_doc=enhancement_doc_for_approval,
             epic=epic,
-            feature_plan=feature_plan,
+            feature_plan=OpenShiftFeaturePlan(summary="", affected_tiers=[], pr_sequence=[], estimated_timeline=""),
         )
 
         approval_result: str = await workflow.execute_child_workflow(
@@ -409,13 +367,12 @@ class FullSDLCWorkflow:
             )
             return StagingPlan(feature_id=run_id, repos=[])
 
-        workflow.logger.info("Enhancement PR approved; proceeding to story planning")
+        workflow.logger.info("Enhancement PR approved; loading approved repos")
 
-        # Phase D.5 — Fork repos listed in the approved enhancement document
-        enhancement_doc_ref = f"runs/{run_id}/enhancement-doc.json"
+        # Phase D — Load approved enhancement doc, fork its repos
         enhancement_doc = await workflow.execute_activity(
             load_enhancement_doc,
-            enhancement_doc_ref,
+            f"runs/{run_id}/enhancement-doc.json",
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(
                 initial_interval=timedelta(seconds=2),
@@ -433,15 +390,49 @@ class FullSDLCWorkflow:
                 execution_timeout=timedelta(minutes=10),
             )
         workflow.logger.info(
-            "Phase D.5: forked %d repos from enhancement doc into %s",
+            "Phase D: forked %d repos from enhancement doc into %s",
             len(repos_to_fork), feature_input.staging_github_org,
         )
 
-        # Phase E — Story proposal and human refinement loop
-        from agents.requirements_agent.activities import propose_stories  # noqa: PLC0415
+        # Phase E — Analyze feature scoped to the approved repos
+        openshift_input = OpenShiftFeatureInput(
+            feature_description=feature_input.feature_description,
+            target_ocp_version=feature_input.target_ocp_version,
+            jira_epic_id=epic.key,
+            jira_context={
+                "epic_id": epic.key,
+                "title": epic.summary,
+                "stories": [
+                    {"title": s.summary, "description": s.description or ""}
+                    for s in epic.stories
+                ],
+            },
+            repos=repos_to_fork,
+        )
+        feature_plan_ref: str = await workflow.execute_child_workflow(
+            OpenShiftFeatureWorkflow.run,
+            args=[openshift_input, run_id],
+            id=f"{run_id}-openshift-feature",
+            task_queue="openshift-agent",
+            execution_timeout=timedelta(minutes=15),
+        )
+        workflow.logger.info("Feature plan artifact: %s", feature_plan_ref)
 
-        # Load requirement spec artifact via a helper (spec was stored in Phase B of requirements flow)
-        # For now, build a minimal spec from the epic for story proposal
+        from agents.orchestrator.activities import load_feature_plan  # noqa: PLC0415
+
+        feature_plan = await workflow.execute_activity(
+            load_feature_plan,
+            feature_plan_ref,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_attempts=3,
+            ),
+        )
+
+        # Phase F — Story proposal and human refinement loop
+        from agents.requirements_agent.activities import propose_stories  # noqa: PLC0415
         from agents.common.models import RequirementSpec, Story  # noqa: PLC0415
 
         minimal_spec = RequirementSpec(
@@ -472,7 +463,7 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(days=14),
         )
 
-        # Phase F — Create, size, prioritize, link stories
+        # Phase G — Create, size, prioritize, link stories
         await workflow.execute_child_workflow(
             CreateStoriesWorkflow.run,
             args=[epic.key, final_story_plan],
@@ -481,7 +472,7 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(minutes=5),
         )
 
-        # Phase G — Create feature branches and staging PRs for forked repos
+        # Phase H — Create feature branches and staging PRs for forked repos
         staging_plan: StagingPlan = await workflow.execute_child_workflow(
             SetupStagingReposWorkflow.run,
             args=[repos_to_fork, feature_input.staging_github_org, run_id, feature_branch],
@@ -490,7 +481,7 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(minutes=10),
         )
 
-        # Phase H — Generate and commit code changes (one PR per repo)
+        # Phase I — Generate and commit code changes (one PR per repo)
         await workflow.execute_child_workflow(
             ImplementFeatureWorkflow.run,
             args=[staging_plan, feature_plan, feature_input.feature_description, run_id],
@@ -498,9 +489,9 @@ class FullSDLCWorkflow:
             task_queue="github-agent",
             execution_timeout=timedelta(hours=4),
         )
-        workflow.logger.info("Phase H: code generation complete for %d repos", len(staging_plan.repos))
+        workflow.logger.info("Phase I: code generation complete for %d repos", len(staging_plan.repos))
 
-        # Phase I — Start long-lived PR monitors (fire-and-forget, watches for human comments)
+        # Phase J — Start long-lived PR monitors (fire-and-forget, watches for human comments)
         for staging_repo in staging_plan.repos:
             repo_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
             await workflow.start_child_workflow(

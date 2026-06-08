@@ -112,6 +112,7 @@ class OpenShiftFeatureInput(BaseModel):
     target_ocp_version: str | None = None
     jira_epic_id: str | None = None
     jira_context: dict | None = None
+    repos: list[str] = Field(default_factory=list, description="Pre-approved repo slugs from the enhancement doc; when set, skips MCP discovery")
 
 
 class AffectedRepo(BaseModel):

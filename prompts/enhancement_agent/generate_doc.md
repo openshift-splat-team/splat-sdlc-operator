@@ -2,9 +2,9 @@
 You are a senior OpenShift architect writing an OpenShift Enhancement Proposal (EP).
 Follow the standard OpenShift enhancement template structure exactly.
 
-Produce a complete, well-reasoned enhancement document based on the Jira epic and
-the feature implementation plan provided. Be specific and technical. The audience is
-OpenShift engineers and architects who will review and approve this proposal.
+Produce a complete, well-reasoned enhancement document based on the Jira epic
+provided. Be specific and technical. The audience is OpenShift engineers and
+architects who will review and approve this proposal.
 
 Guidelines:
 - Goals and Non-Goals should be concise bullet points
@@ -13,6 +13,10 @@ Guidelines:
 - Risks and Mitigations should be concrete (not generic)
 - Graduation Criteria should reference e2e tests or observable signals
 - Drawbacks and Alternatives should reflect genuine trade-offs considered
+- For `repos_to_fork`, identify every OpenShift repository (owner/repo) that
+  will need code changes to implement this enhancement. Think through the
+  component architecture: API types, operators, controllers, CLI, installers,
+  test suites, and CI configuration.
 
 {% if memories %}
 {{ memories }}
@@ -37,7 +41,7 @@ Output schema:
   "graduation_criteria": "string — how we know this is ready for GA",
   "drawbacks": ["string", ...],
   "alternatives": ["string", ...],
-  "repos_to_fork": ["string — owner/repo slug, e.g. 'openshift/node-feature-discovery'", ...]
+  "repos_to_fork": ["string — owner/repo slug, e.g. 'openshift/installer'", ...]
 }
 
 <!-- role: user -->
@@ -58,34 +62,6 @@ Output schema:
 ### Target OCP Version
 {{ target_ocp_version }}
 
-### Feature Implementation Plan
-
-**Summary:** {{ feature_plan.summary }}
-
-**Affected Tiers:** {{ feature_plan.affected_tiers | join(", ") }}
-
-**Estimated Timeline:** {{ feature_plan.estimated_timeline }}
-
-{% if feature_plan.risks %}
-**Known Risks:**
-{% for risk in feature_plan.risks %}
-- {{ risk }}
-{% endfor %}
-{% endif %}
-
-**PR Sequence:**
-{% for step in feature_plan.pr_sequence %}
-{{ step.step }}. [{{ step.tier }}] {{ step.repo }} — {{ step.description }} (risk: {{ step.risk }}){% if step.blocked_by_step %} — blocked by step {{ step.blocked_by_step }}{% endif %}
-
-{% endfor %}
-
-{% if feature_plan.notes %}
-**Notes:**
-{% for note in feature_plan.notes %}
-- {{ note }}
-{% endfor %}
-{% endif %}
-
-For `repos_to_fork`, list every unique repository slug (owner/repo) that must be forked into the staging org to implement this enhancement. Derive this directly from the PR Sequence above — include the repo from every step. Preserve any repo that is marked required or that appears in Tier 0 or Tier 1.
+For `repos_to_fork`, list every unique repository slug (owner/repo) that must be forked into the staging org to implement this enhancement. Think through which OpenShift components need changes: API types (openshift/api), operators, controllers, installers, test frameworks (openshift/openshift-tests), and CI configuration (openshift/release).
 
 Produce the OpenShift enhancement document JSON now.

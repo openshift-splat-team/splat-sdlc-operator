@@ -19,6 +19,19 @@ async def identify_affected_repos(input: OpenShiftFeatureInput) -> RepoIdentific
     settings = OpenShiftAgentSettings()
     activity.logger.info("Identifying affected repos for: %s", input.feature_description[:80])
 
+    if input.repos:
+        activity.logger.info("Using %d pre-approved repos from enhancement doc", len(input.repos))
+        repos = [
+            AffectedRepo(name=r, tier="tier-1", reason="Listed in approved enhancement document")
+            for r in input.repos
+        ]
+        return RepoIdentificationResult(
+            repos=repos,
+            primary_repo=repos[0].name if repos else "",
+            api_change_required=any("api" in r.lower() for r in input.repos),
+            mco_involved=any("machine-config" in r.lower() for r in input.repos),
+        )
+
     async with mcp_client.connect(settings) as client:
         impact = await client.feature_impact(input.feature_description)
 

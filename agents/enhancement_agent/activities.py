@@ -26,7 +26,6 @@ def _feature_slug(title: str) -> str:
 @activity.defn
 async def generate_enhancement_doc(
     epic: JiraEpic,
-    feature_plan: OpenShiftFeaturePlan,
     target_ocp_version: str | None,
     memories_context: str = "",
 ) -> EnhancementDoc:
@@ -38,7 +37,6 @@ async def generate_enhancement_doc(
         epic_key=epic.key,
         epic_summary=epic.summary,
         epic_description=epic.description or "",
-        feature_plan=feature_plan.model_dump(),
         target_ocp_version=target_ocp_version or "next",
         parent_key=epic.parent_key,
         parent_summary=epic.parent_summary,

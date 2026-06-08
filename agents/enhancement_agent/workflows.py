@@ -53,7 +53,6 @@ class EnhancementWorkflow:
     async def run(
         self,
         epic: JiraEpic,
-        feature_plan: OpenShiftFeaturePlan,
         pr_input: EnhancementPRInput,
         feature_branch: str,
         target_ocp_version: str | None,
@@ -71,7 +70,7 @@ class EnhancementWorkflow:
 
         doc: EnhancementDoc = await workflow.execute_activity(
             generate_enhancement_doc,
-            args=[epic, feature_plan, target_ocp_version, memories_context],
+            args=[epic, target_ocp_version, memories_context],
             start_to_close_timeout=timedelta(minutes=10),
             retry_policy=_LLM_RETRY,
         )
