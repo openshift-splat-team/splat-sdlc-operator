@@ -57,6 +57,7 @@ FIELD_MAP: list[tuple[str, str]] = [
     ("Custom field (Story point)",             "story_points"),   # alternate label
     ("Custom field (Parent Link)",             "epic_link_key"),  # epic's parent in some exports
     ("Parent key",                             "parent_key"),
+    ("Fix Version/s",                          "fix_versions"),
     # Labels are handled separately — Jira exports use one column per label,
     # all named "Labels", so they're collected via _collect_labels().
 ]
@@ -154,6 +155,9 @@ def parse_fields_sheet(ws) -> list[dict]:
         if epic_link_key == key:
             epic_link_key = None
 
+        raw_fv = _str(get("fix_versions"))
+        fix_versions = [v.strip() for v in (raw_fv or "").replace("\n", ",").split(",") if v.strip()] if raw_fv else []
+
         issues.append({
             "key": key,
             "summary": summary,
@@ -165,6 +169,7 @@ def parse_fields_sheet(ws) -> list[dict]:
             "epic_link_key": epic_link_key,
             "parent_key": parent_key,
             "labels": labels,
+            "fix_versions": fix_versions,
         })
 
     return issues

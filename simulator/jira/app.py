@@ -25,6 +25,7 @@ UI:
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -34,8 +35,10 @@ import time
 from contextlib import contextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse
+import html as _html
+
+from fastapi import FastAPI, Form, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -68,6 +71,7 @@ def _init_db(path: str) -> None:
                 epic_link_key TEXT,
                 parent_key  TEXT,
                 labels      TEXT NOT NULL DEFAULT '[]',
+                fix_versions TEXT NOT NULL DEFAULT '[]',
                 created_at  REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS comments (
@@ -87,6 +91,10 @@ def _init_db(path: str) -> None:
         # Migrate existing databases that predate the labels column.
         try:
             conn.execute("ALTER TABLE issues ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE issues ADD COLUMN fix_versions TEXT NOT NULL DEFAULT '[]'")
         except sqlite3.OperationalError:
             pass  # column already exists
 
@@ -112,6 +120,9 @@ def _next_key(project: str) -> str:
     return f"{project}-{n}"
 
 # ── Issue serialisation ───────────────────────────────────────────────────────
+
+def _fmt_ts(ts: float) -> str:
+    return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
 
 def _issue_row_to_dict(row: sqlite3.Row, conn: sqlite3.Connection, include_comments: bool = True) -> dict:
     key = row["key"]
@@ -153,6 +164,7 @@ def _issue_row_to_dict(row: sqlite3.Row, conn: sqlite3.Connection, include_comme
         "key": key,
         "self": f"http://localhost:8080/rest/api/2/issue/{key}",
         "fields": {
+            "project": {"key": row["project"], "name": row["project"]},
             "summary": row["summary"],
             "description": row["description"],
             "issuetype": {"name": row["issuetype"]},
@@ -162,6 +174,7 @@ def _issue_row_to_dict(row: sqlite3.Row, conn: sqlite3.Connection, include_comme
             "customfield_10016": row["story_points"],
             "customfield_10014": row["epic_link_key"],
             "labels": json.loads(row["labels"] or "[]"),
+            "fixVersions": [{"name": n} for n in json.loads(row["fix_versions"] or "[]")],
             "parent": parent_json,
             "issuelinks": issue_links_json,
             "comment": {"comments": comments_json, "total": len(comments_json)},
@@ -173,7 +186,7 @@ def _comment_row_to_dict(row: sqlite3.Row) -> dict:
         "id": str(row["id"]),
         "body": row["body"],
         "author": {"displayName": row["author"], "name": row["author"]},
-        "created": row["created_at"],
+        "created": _fmt_ts(row["created_at"]),
     }
 
 # ── JQL evaluator ─────────────────────────────────────────────────────────────
@@ -338,12 +351,14 @@ async def create_issue(request: Request):
     number = int(key.split("-")[1])
     raw_labels = f.get("labels", [])
     labels_json = json.dumps(raw_labels if isinstance(raw_labels, list) else [])
+    raw_fix_versions = [v.get("name", "") for v in f.get("fixVersions", []) if isinstance(v, dict)]
+    fix_versions_json = json.dumps(raw_fix_versions)
     with db() as conn:
         conn.execute(
             """INSERT INTO issues
                (key, project, number, summary, description, issuetype,
-                status, story_points, epic_link_key, parent_key, labels, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                status, story_points, epic_link_key, parent_key, labels, fix_versions, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key, PROJECT_KEY, number,
                 f.get("summary", ""),
@@ -354,6 +369,7 @@ async def create_issue(request: Request):
                 f.get("customfield_10014"),
                 f.get("parent", {}).get("key") if isinstance(f.get("parent"), dict) else None,
                 labels_json,
+                fix_versions_json,
                 time.time(),
             ),
         )
@@ -386,6 +402,26 @@ async def update_issue(key: str, request: Request):
             conn.execute(
                 "UPDATE issues SET labels=? WHERE key=?",
                 (json.dumps(raw if isinstance(raw, list) else []), key),
+            )
+        if "fixVersions" in fields:
+            raw = fields["fixVersions"]
+            names = [v.get("name", "") for v in raw if isinstance(v, dict)]
+            conn.execute(
+                "UPDATE issues SET fix_versions=? WHERE key=?",
+                (json.dumps(names), key),
+            )
+        update = body.get("update", {})
+        if "labels" in update:
+            cur_row = conn.execute("SELECT labels FROM issues WHERE key=?", (key,)).fetchone()
+            current = set(json.loads(cur_row["labels"] or "[]"))
+            for op in update["labels"]:
+                if "add" in op:
+                    current.add(op["add"])
+                if "remove" in op:
+                    current.discard(op["remove"])
+            conn.execute(
+                "UPDATE issues SET labels=? WHERE key=?",
+                (json.dumps(sorted(current)), key),
             )
     return Response(status_code=204)
 
@@ -426,7 +462,7 @@ async def add_comment(key: str, request: Request):
         "id": str(cid),
         "body": text,
         "author": {"displayName": "Simulator", "name": "simulator"},
-        "created": ts,
+        "created": _fmt_ts(ts),
     }
 
 @app.get("/rest/api/2/issue/{key}/comment")
@@ -504,9 +540,11 @@ async def import_issues(request: Request):
             if exists and force:
                 # Update all fields in place.
                 raw_labels = issue.get("labels", [])
+                raw_fv = issue.get("fix_versions", [])
                 conn.execute(
                     """UPDATE issues SET summary=?, description=?, issuetype=?, status=?,
-                       resolution=?, story_points=?, epic_link_key=?, parent_key=?, labels=?
+                       resolution=?, story_points=?, epic_link_key=?, parent_key=?, labels=?,
+                       fix_versions=?
                        WHERE key=?""",
                     (
                         issue.get("summary", ""),
@@ -518,6 +556,7 @@ async def import_issues(request: Request):
                         issue.get("epic_link_key"),
                         issue.get("parent_key"),
                         json.dumps(raw_labels if isinstance(raw_labels, list) else []),
+                        json.dumps(raw_fv if isinstance(raw_fv, list) else []),
                         key,
                     ),
                 )
@@ -530,11 +569,14 @@ async def import_issues(request: Request):
 
             raw_labels = issue.get("labels", [])
             labels_json = json.dumps(raw_labels if isinstance(raw_labels, list) else [])
+            raw_fv = issue.get("fix_versions", [])
+            fix_versions_json = json.dumps(raw_fv if isinstance(raw_fv, list) else [])
             conn.execute(
                 """INSERT INTO issues
                    (key, project, number, summary, description, issuetype,
-                    status, resolution, story_points, epic_link_key, parent_key, labels, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    status, resolution, story_points, epic_link_key, parent_key, labels,
+                    fix_versions, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     key, project, number,
                     issue.get("summary", ""),
@@ -546,6 +588,7 @@ async def import_issues(request: Request):
                     issue.get("epic_link_key"),
                     issue.get("parent_key"),
                     labels_json,
+                    fix_versions_json,
                     time.time(),
                 ),
             )
@@ -585,6 +628,25 @@ _CSS = """
   .back a  { color: #0052cc; text-decoration: none; }
   .pts     { font-weight: bold; color: #00875a; }
   .lbl     { display: inline-block; background: #e0e0ff; color: #3333aa; padding: 1px 7px; border-radius: 3px; font-size: 0.8rem; margin: 1px; }
+  /* Forms */
+  .btn     { display: inline-block; padding: 6px 16px; border: none; border-radius: 3px;
+             font-size: 0.9rem; cursor: pointer; text-decoration: none; color: white; }
+  .btn-primary { background: #0052cc; }
+  .btn-primary:hover { background: #0747a6; }
+  .btn-sm  { padding: 4px 10px; font-size: 0.8rem; }
+  .btn-green { background: #00875a; }
+  .btn-green:hover { background: #006644; }
+  form.sim-form label { display: block; font-weight: bold; margin: 0.75rem 0 0.25rem; color: #333; }
+  form.sim-form input[type="text"],
+  form.sim-form input[type="number"],
+  form.sim-form textarea,
+  form.sim-form select { width: 100%; max-width: 600px; padding: 6px 8px; border: 1px solid #ccc;
+                         border-radius: 3px; font-size: 0.9rem; font-family: inherit; box-sizing: border-box; }
+  form.sim-form textarea { min-height: 120px; resize: vertical; }
+  form.sim-form .form-actions { margin-top: 1.25rem; }
+  .toolbar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1.5rem; }
+  .inline-form { display: inline-flex; gap: 0.5rem; align-items: center; }
+  .inline-form select { width: auto; max-width: none; }
 </style>
 """
 
@@ -634,10 +696,13 @@ def ui_list():
 <html><head><title>Jira Simulator — {PROJECT_KEY}</title>{_CSS}</head>
 <body>
 <h1>Jira Simulator — project {PROJECT_KEY}</h1>
-<p class="meta">
-  <a href="/docs">Swagger API</a> &nbsp;|&nbsp;
-  Data stored in <code>{DB_PATH}</code>
-</p>
+<div class="toolbar">
+  <a href="/ui/create" class="btn btn-primary">+ Create Issue</a>
+  <span class="meta" style="margin:0">
+    <a href="/docs">Swagger API</a> &nbsp;|&nbsp;
+    Data stored in <code>{DB_PATH}</code>
+  </span>
+</div>
 
 <h2>Epics ({len(epics)})</h2>
 <table>{epic_head}{rows(epics)}</table>
@@ -722,11 +787,21 @@ def ui_issue(key: str):
 <html><head><title>{key} — Jira Simulator</title>{_CSS}</head>
 <body>
 <div class="back"><a href="/ui">← All issues</a></div>
-<h1>{key}: {row["summary"]}</h1>
+<div class="toolbar">
+  <h1 style="margin:0">{key}: {row["summary"]}</h1>
+  <a href="/ui/issue/{key}/edit" class="btn btn-primary btn-sm">Edit</a>
+</div>
 
 <table style="width:auto;margin-bottom:1.5rem">
   {field_row("Type",        row["issuetype"])}
-  {field_row("Status",      _status_badge(row["status"]))}
+  {field_row("Status",      f'''
+    <form class="inline-form" method="post" action="/ui/issue/{key}/transition">
+      {_status_badge(row["status"])} &nbsp;→&nbsp;
+      <select name="status">
+        {"".join(f'<option value="{s}"{"selected" if s == row["status"] else ""}>{s}</option>' for s in STATUSES)}
+      </select>
+      <button type="submit" class="btn btn-primary btn-sm">Update</button>
+    </form>''')}
   {field_row("Resolution",  row["resolution"])}
   {field_row("Story points",pts)}
   {field_row("Labels",      labels_html)}
@@ -749,13 +824,256 @@ def ui_issue(key: str):
 
 <h2>Comments ({len(comments)})</h2>
 {comments_html}
+
+<form class="sim-form" method="post" action="/ui/issue/{key}/comment" style="margin-top:1rem">
+  <label for="comment-body">Add a comment</label>
+  <textarea name="body" id="comment-body" style="min-height:80px" placeholder="Write a comment..."></textarea>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-green btn-sm">Add Comment</button>
+  </div>
+</form>
 </body></html>
 """
     return HTMLResponse(html)
+
+# ── UI: Create / Edit / Comment / Transition ────────────────────────────────
+
+ISSUE_TYPES = ["Epic", "Story", "Task", "Bug"]
+STATUSES = ["To Do", "In Progress", "Done", "Won't Do"]
+
+def _issue_form_html(
+    action: str,
+    *,
+    title: str,
+    epics: list,
+    issues: list,
+    values: dict | None = None,
+    show_type: bool = True,
+) -> str:
+    esc = _html.escape
+    v = values or {}
+    summary = esc(v.get("summary", ""))
+    description = esc(v.get("description", ""))
+    issuetype = v.get("issuetype", "Story")
+    story_points = v.get("story_points", "")
+    epic_link_key = v.get("epic_link_key", "")
+    parent_key = v.get("parent_key", "")
+    labels = esc(v.get("labels", ""))
+
+    type_options = "".join(
+        f'<option value="{t}" {"selected" if t == issuetype else ""}>{t}</option>'
+        for t in ISSUE_TYPES
+    )
+    type_field = f"""
+      <label for="issuetype">Issue Type</label>
+      <select name="issuetype" id="issuetype">{type_options}</select>
+    """ if show_type else f'<input type="hidden" name="issuetype" value="{issuetype}">'
+
+    epic_options = '<option value="">— None —</option>' + "".join(
+        f'<option value="{e["key"]}" {"selected" if e["key"] == epic_link_key else ""}>'
+        f'{e["key"]} — {esc(e["summary"])}</option>'
+        for e in epics
+    )
+    parent_options = '<option value="">— None —</option>' + "".join(
+        f'<option value="{i["key"]}" {"selected" if i["key"] == parent_key else ""}>'
+        f'{i["key"]} — {esc(i["summary"])}</option>'
+        for i in issues
+    )
+
+    pts_val = f'value="{int(story_points)}"' if story_points else ""
+
+    return f"""<!doctype html>
+<html><head><title>{title} — Jira Simulator</title>{_CSS}</head>
+<body>
+<div class="back"><a href="/ui">← All issues</a></div>
+<h1>{title}</h1>
+<form class="sim-form" method="post" action="{action}">
+  <label for="summary">Summary</label>
+  <input type="text" name="summary" id="summary" value="{summary}" required>
+
+  {type_field}
+
+  <label for="description">Description</label>
+  <textarea name="description" id="description">{description}</textarea>
+
+  <label for="story_points">Story Points</label>
+  <input type="number" name="story_points" id="story_points" min="0" step="1" {pts_val}>
+
+  <label for="epic_link_key">Epic Link</label>
+  <select name="epic_link_key" id="epic_link_key">{epic_options}</select>
+
+  <label for="parent_key">Parent</label>
+  <select name="parent_key" id="parent_key">{parent_options}</select>
+
+  <label for="labels">Labels <span style="font-weight:normal;color:#888">(comma-separated)</span></label>
+  <input type="text" name="labels" id="labels" value="{labels}">
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Save</button>
+  </div>
+</form>
+</body></html>"""
+
+
+@app.get("/ui/create", response_class=HTMLResponse)
+def ui_create():
+    with db() as conn:
+        epics = conn.execute(
+            "SELECT key, summary FROM issues WHERE issuetype='Epic' ORDER BY number"
+        ).fetchall()
+        all_issues = conn.execute(
+            "SELECT key, summary FROM issues ORDER BY number"
+        ).fetchall()
+    return HTMLResponse(_issue_form_html(
+        "/ui/create",
+        title="Create Issue",
+        epics=[dict(e) for e in epics],
+        issues=[dict(i) for i in all_issues],
+    ))
+
+
+@app.post("/ui/create")
+async def ui_create_submit(
+    summary: str = Form(""),
+    description: str = Form(""),
+    issuetype: str = Form("Story"),
+    story_points: str = Form(""),
+    epic_link_key: str = Form(""),
+    parent_key: str = Form(""),
+    labels: str = Form(""),
+):
+    key = _next_key(PROJECT_KEY)
+    number = int(key.split("-")[1])
+    pts = float(story_points) if story_points.strip() else None
+    label_list = [l.strip() for l in labels.split(",") if l.strip()] if labels.strip() else []
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO issues
+               (key, project, number, summary, description, issuetype,
+                status, story_points, epic_link_key, parent_key, labels, fix_versions, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                key, PROJECT_KEY, number,
+                summary,
+                description or None,
+                issuetype.title(),
+                "To Do",
+                pts,
+                epic_link_key or None,
+                parent_key or None,
+                json.dumps(label_list),
+                "[]",
+                time.time(),
+            ),
+        )
+    return RedirectResponse(url=f"/ui/issue/{key}", status_code=303)
+
+
+@app.get("/ui/issue/{key}/edit", response_class=HTMLResponse)
+def ui_edit(key: str):
+    key = key.upper()
+    with db() as conn:
+        row = conn.execute("SELECT * FROM issues WHERE key=?", (key,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Issue {key} not found")
+        epics = conn.execute(
+            "SELECT key, summary FROM issues WHERE issuetype='Epic' ORDER BY number"
+        ).fetchall()
+        all_issues = conn.execute(
+            "SELECT key, summary FROM issues WHERE key != ? ORDER BY number", (key,)
+        ).fetchall()
+    labels_str = ", ".join(json.loads(row["labels"] or "[]"))
+    return HTMLResponse(_issue_form_html(
+        f"/ui/issue/{key}/edit",
+        title=f"Edit {key}",
+        epics=[dict(e) for e in epics],
+        issues=[dict(i) for i in all_issues],
+        values={
+            "summary": row["summary"],
+            "description": row["description"] or "",
+            "issuetype": row["issuetype"],
+            "story_points": row["story_points"],
+            "epic_link_key": row["epic_link_key"] or "",
+            "parent_key": row["parent_key"] or "",
+            "labels": labels_str,
+        },
+        show_type=False,
+    ))
+
+
+@app.post("/ui/issue/{key}/edit")
+async def ui_edit_submit(
+    key: str,
+    summary: str = Form(""),
+    description: str = Form(""),
+    issuetype: str = Form("Story"),
+    story_points: str = Form(""),
+    epic_link_key: str = Form(""),
+    parent_key: str = Form(""),
+    labels: str = Form(""),
+):
+    key = key.upper()
+    pts = float(story_points) if story_points.strip() else None
+    label_list = [l.strip() for l in labels.split(",") if l.strip()] if labels.strip() else []
+    with db() as conn:
+        row = conn.execute("SELECT key FROM issues WHERE key=?", (key,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Issue {key} not found")
+        conn.execute(
+            """UPDATE issues SET summary=?, description=?, story_points=?,
+               epic_link_key=?, parent_key=?, labels=? WHERE key=?""",
+            (
+                summary,
+                description or None,
+                pts,
+                epic_link_key or None,
+                parent_key or None,
+                json.dumps(label_list),
+                key,
+            ),
+        )
+    return RedirectResponse(url=f"/ui/issue/{key}", status_code=303)
+
+
+@app.post("/ui/issue/{key}/comment")
+async def ui_add_comment(key: str, body: str = Form("")):
+    key = key.upper()
+    if not body.strip():
+        return RedirectResponse(url=f"/ui/issue/{key}", status_code=303)
+    with db() as conn:
+        row = conn.execute("SELECT key FROM issues WHERE key=?", (key,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Issue {key} not found")
+        conn.execute(
+            "INSERT INTO comments(issue_key, body, author, created_at) VALUES(?,?,?,?)",
+            (key, body, "Web UI", time.time()),
+        )
+    return RedirectResponse(url=f"/ui/issue/{key}", status_code=303)
+
+
+@app.post("/ui/issue/{key}/transition")
+async def ui_transition(key: str, status: str = Form("To Do")):
+    key = key.upper()
+    if status not in STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+    resolution = None
+    if status == "Done":
+        resolution = "Done"
+    elif status == "Won't Do":
+        resolution = "Won't Do"
+    with db() as conn:
+        row = conn.execute("SELECT key FROM issues WHERE key=?", (key,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Issue {key} not found")
+        conn.execute(
+            "UPDATE issues SET status=?, resolution=? WHERE key=?",
+            (status, resolution, key),
+        )
+    return RedirectResponse(url=f"/ui/issue/{key}", status_code=303)
+
 
 # ── Root redirect ─────────────────────────────────────────────────────────────
 
 @app.get("/")
 def root():
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/ui")
