@@ -123,22 +123,15 @@ class SetupStagingReposWorkflow:
     @workflow.run
     async def run(
         self,
-        feature_plan: OpenShiftFeaturePlan,
+        repos_to_fork: list[str],
         staging_org: str,
         feature_id: str,
         feature_branch: str,
     ) -> StagingPlan:
+        unique_repos = list(dict.fromkeys(repos_to_fork))
         workflow.logger.info(
-            "SetupStagingReposWorkflow: setting up %d repos", len(feature_plan.pr_sequence)
+            "SetupStagingReposWorkflow: setting up %d repos", len(unique_repos)
         )
-
-        # Deduplicate repos from the PR sequence
-        seen: set[str] = set()
-        unique_repos: list[str] = []
-        for step in feature_plan.pr_sequence:
-            if step.repo not in seen:
-                seen.add(step.repo)
-                unique_repos.append(step.repo)
 
         # Fork all repos concurrently
         fork_tasks = [
@@ -166,17 +159,8 @@ class SetupStagingReposWorkflow:
 
         # Create draft PRs with agent-hold (sequential to avoid rate limits)
         for i, sr in enumerate(staging_repos):
-            repo_slug = f"{sr.source_org}/{sr.source_repo}"
             title = f"feat: {feature_id} changes for {sr.source_repo}"
-            body = (
-                f"This PR implements changes for feature {feature_id}.\n\n"
-                f"**CI Requirements:**\n"
-                + "\n".join(
-                    f"- {job.job_name} ({job.job_type})"
-                    for job in feature_plan.ci_requirements.required_jobs
-                    if job.repo == repo_slug
-                )
-            )
+            body = f"This PR implements changes for feature {feature_id}.\n"
             staging_repos[i] = await workflow.execute_activity(
                 create_staging_pr,
                 args=[sr, feature_id, title, body],

@@ -411,20 +411,7 @@ class FullSDLCWorkflow:
 
         workflow.logger.info("Enhancement PR approved; proceeding to story planning")
 
-        # Phase D.5 — Fork all identified repos into the staging org
-        unique_slugs = list(dict.fromkeys(
-            step.repo for step in feature_plan.pr_sequence
-        ))
-        await workflow.execute_child_workflow(
-            ForkReposWorkflow.run,
-            args=[unique_slugs, feature_input.staging_github_org],
-            id=f"{run_id}-fork-repos",
-            task_queue="github-agent",
-            execution_timeout=timedelta(minutes=10),
-        )
-        workflow.logger.info("Phase D.5: forked %d repos into %s", len(unique_slugs), feature_input.staging_github_org)
-
-        # Phase D.6 — Reconcile forks declared in the approved enhancement doc
+        # Phase D.5 — Fork repos listed in the approved enhancement document
         enhancement_doc_ref = f"runs/{run_id}/enhancement-doc.json"
         enhancement_doc = await workflow.execute_activity(
             load_enhancement_doc,
@@ -436,17 +423,19 @@ class FullSDLCWorkflow:
                 maximum_attempts=3,
             ),
         )
-        if enhancement_doc.repos_to_fork:
-            workflow.logger.info(
-                "Phase D.5: reconciling %d repos from enhancement doc", len(enhancement_doc.repos_to_fork)
-            )
+        repos_to_fork = enhancement_doc.repos_to_fork
+        if repos_to_fork:
             await workflow.execute_child_workflow(
                 ForkReposWorkflow.run,
-                args=[enhancement_doc.repos_to_fork, feature_input.staging_github_org],
-                id=f"{run_id}-fork-repos-reconcile",
+                args=[repos_to_fork, feature_input.staging_github_org],
+                id=f"{run_id}-fork-repos",
                 task_queue="github-agent",
                 execution_timeout=timedelta(minutes=10),
             )
+        workflow.logger.info(
+            "Phase D.5: forked %d repos from enhancement doc into %s",
+            len(repos_to_fork), feature_input.staging_github_org,
+        )
 
         # Phase E — Story proposal and human refinement loop
         from agents.requirements_agent.activities import propose_stories  # noqa: PLC0415
@@ -492,10 +481,10 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(minutes=5),
         )
 
-        # Phase G — Fork repos and create staging PRs
+        # Phase G — Create feature branches and staging PRs for forked repos
         staging_plan: StagingPlan = await workflow.execute_child_workflow(
             SetupStagingReposWorkflow.run,
-            args=[feature_plan, feature_input.staging_github_org, run_id, feature_branch],
+            args=[repos_to_fork, feature_input.staging_github_org, run_id, feature_branch],
             id=f"{run_id}-setup-staging",
             task_queue="github-agent",
             execution_timeout=timedelta(minutes=10),
