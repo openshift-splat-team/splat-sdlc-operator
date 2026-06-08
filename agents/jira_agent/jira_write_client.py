@@ -75,7 +75,9 @@ def create_story(draft: JiraStoryDraft, settings: JiraAgentSettings) -> JiraStor
         criteria_text = "\n".join(f"* {c}" for c in draft.acceptance_criteria)
         description = f"{description}\n\nh3. Acceptance Criteria\n{criteria_text}"
 
+    project_key = draft.epic_key.split("-")[0]
     fields: dict = {
+        "project": {"key": project_key},
         "summary": draft.title,
         "description": description,
         "issuetype": {"name": "Story"},

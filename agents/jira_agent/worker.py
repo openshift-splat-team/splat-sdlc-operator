@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from agents.common import llm_config
+from agents.common.memory_activities import extract_observations, recall_agent_memories, save_memory_entry
 from agents.common.settings import JiraAgentSettings
 from agents.jira_agent.activities import (
     close_story_wont_do,
@@ -33,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     settings = JiraAgentSettings()
+    if config_path := os.environ.get("LLM_CONFIG_PATH"):
+        llm_config.load(config_path)
+        logger.info("Loaded LLM config from %s", config_path)
     logger.info(
         "Connecting to Temporal at %s, task queue=%s",
         settings.temporal_host,
@@ -64,6 +70,7 @@ async def main() -> None:
             set_story_dependencies,
             close_story_wont_do,
             store_story_plan,
+            save_memory_entry, recall_agent_memories, extract_observations,
         ],
     ):
         logger.info("Jira agent worker running")

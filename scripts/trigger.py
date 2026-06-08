@@ -13,7 +13,7 @@ from agents.common.settings import OrchestratorSettings
 from agents.orchestrator.workflows import SDLCOrchestratorWorkflow
 from agents.requirements_agent.jira_client import parse_issue_key
 
-TASK_TYPES = ("requirements", "review", "create_pr", "openshift_feature", "full_sdlc")
+TASK_TYPES = ("requirements", "review", "create_pr", "openshift_feature", "full_sdlc", "enhancement_review")
 
 
 def prompt(label: str, default: str | None = None, optional: bool = False) -> str | None:
@@ -30,7 +30,11 @@ async def main() -> None:
     print("SDLC Workflow Trigger")
     print("---------------------")
     print(f"Task types: {', '.join(TASK_TYPES)}")
-    task_type = prompt("Task type").lower()
+    cli_task = sys.argv[1] if len(sys.argv) > 1 else None
+    if cli_task:
+        task_type = cli_task.lower()
+    else:
+        task_type = prompt("Task type", default="full_sdlc").lower()
 
     if task_type not in TASK_TYPES:
         print(f"Unknown task type: {task_type}", file=sys.stderr)
@@ -41,6 +45,7 @@ async def main() -> None:
     github_create_pr = None
     openshift_feature = None
     full_sdlc = None
+    enhancement_review = None
 
     if task_type == "requirements":
         raw = prompt("Jira epic key or URL")
@@ -95,13 +100,65 @@ async def main() -> None:
             print(f"Feature description: {description[:120]}{'...' if len(description) > 120 else ''}")
         if not description:
             description = prompt("Feature description")
-        version = prompt("Target OCP version (e.g. 4.17)", default=env.get("TARGET_OCP_VERSION"), optional=True)
+        jira_version = epic.target_ocp_version if epic_id else None
+        if jira_version:
+            print(f"Target OCP version from Jira: {jira_version}")
+        version = prompt(
+            "Target OCP version (e.g. 4.17)",
+            default=jira_version or env.get("TARGET_OCP_VERSION"),
+            optional=True,
+        )
         staging_org = prompt("Staging GitHub org", default=env.get("STAGING_GITHUB_ORG", "rvanderp3"))
         enhancement_repo = prompt(
             "Enhancement repo",
             default=env.get("ENHANCEMENT_REPO", "openshift-splat-team/enhancements"),
         )
         full_sdlc = SDLCFeatureInput(
+            jira_epic_id=epic_id,
+            feature_description=description,
+            target_ocp_version=version,
+            staging_github_org=staging_org,
+            enhancement_repo=enhancement_repo,
+        )
+
+    elif task_type == "enhancement_review":
+        from dotenv import dotenv_values
+
+        from agents.common.models import EnhancementReviewInput
+        from agents.common.settings import RequirementsAgentSettings
+        from agents.requirements_agent.jira_client import fetch_epic
+        env = dotenv_values(".env")
+        source_run_id = prompt("Source run ID (from a previous full_sdlc run)")
+        if not source_run_id:
+            print("Source run ID is required.", file=sys.stderr)
+            sys.exit(1)
+        raw_epic = prompt("Jira epic key or URL")
+        if not raw_epic:
+            print("Jira epic key is required.", file=sys.stderr)
+            sys.exit(1)
+        epic_id = parse_issue_key(raw_epic)
+        print(f"Fetching feature description from Jira epic {epic_id}...")
+        jira_settings = RequirementsAgentSettings()
+        epic = fetch_epic(epic_id, jira_settings)
+        description = epic.summary
+        if epic.description:
+            description = f"{epic.summary}\n\n{epic.description}"
+        print(f"Feature description: {description[:120]}{'...' if len(description) > 120 else ''}")
+        jira_version = epic.target_ocp_version
+        if jira_version:
+            print(f"Target OCP version from Jira: {jira_version}")
+        version = prompt(
+            "Target OCP version (e.g. 4.17)",
+            default=jira_version or env.get("TARGET_OCP_VERSION"),
+            optional=True,
+        )
+        staging_org = prompt("Staging GitHub org", default=env.get("STAGING_GITHUB_ORG", "rvanderp3"))
+        enhancement_repo = prompt(
+            "Enhancement repo",
+            default=env.get("ENHANCEMENT_REPO", "openshift-splat-team/enhancements"),
+        )
+        enhancement_review = EnhancementReviewInput(
+            source_run_id=source_run_id,
             jira_epic_id=epic_id,
             feature_description=description,
             target_ocp_version=version,
@@ -117,6 +174,7 @@ async def main() -> None:
         github_create_pr=github_create_pr,
         openshift_feature=openshift_feature,
         full_sdlc=full_sdlc,
+        enhancement_review=enhancement_review,
         run_id=run_id,
     )
 

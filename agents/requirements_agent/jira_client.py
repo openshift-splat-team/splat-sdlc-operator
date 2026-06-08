@@ -34,10 +34,18 @@ def fetch_epic(epic_key_or_url: str, settings: RequirementsAgentSettings) -> Jir
     jira = _connect(settings)
     epic_issue = jira.issue(epic_key)
 
+    target_ocp_version: str | None = None
+    for v in getattr(epic_issue.fields, "fixVersions", None) or []:
+        m = re.search(r'4\.\d+', getattr(v, "name", ""))
+        if m:
+            target_ocp_version = m.group(0)
+            break
+
     epic = JiraEpic(
         key=epic_issue.key,
         summary=epic_issue.fields.summary,
         description=getattr(epic_issue.fields, "description", None),
+        target_ocp_version=target_ocp_version,
     )
 
     # Fetch parent context if present

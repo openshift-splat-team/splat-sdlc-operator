@@ -8,7 +8,11 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from agents.common.models import (
+        EnhancementApprovalInput,
         EnhancementPRInput,
+        EnhancementReviewInput,
+        FeatureImplementationResult,
+        ImplementFeatureInput,
         JiraEpic,
         OpenShiftFeatureInput,
         SDLCFeatureInput,
@@ -22,6 +26,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from agents.github_agent.workflows import (
         CreatePRWorkflow,
+        ForkReposWorkflow,
+        ImplementFeatureWorkflow,
         MonitorPRWorkflow,
         ReviewWorkflow,
         SetupStagingReposWorkflow,
@@ -135,6 +141,124 @@ class SDLCOrchestratorWorkflow:
                 artifact_ref=staging_plan.artifact_ref,
             )
 
+        elif trigger.task_type == "implement_feature":
+            if not trigger.implement_feature:
+                raise ValueError("implement_feature required for implement_feature task")
+
+            from agents.orchestrator.activities import load_feature_plan, load_staging_plan  # noqa: PLC0415
+
+            inp: ImplementFeatureInput = trigger.implement_feature
+            staging_plan = await workflow.execute_activity(
+                load_staging_plan,
+                inp.staging_plan_ref,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(initial_interval=timedelta(seconds=2), backoff_coefficient=2.0, maximum_attempts=3),
+            )
+            feature_plan = await workflow.execute_activity(
+                load_feature_plan,
+                inp.feature_plan_ref,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(initial_interval=timedelta(seconds=2), backoff_coefficient=2.0, maximum_attempts=3),
+            )
+            impl_result: FeatureImplementationResult = await workflow.execute_child_workflow(
+                ImplementFeatureWorkflow.run,
+                args=[staging_plan, feature_plan, inp.feature_description, trigger.run_id],
+                id=f"{trigger.run_id}-implement-feature",
+                task_queue="github-agent",
+                execution_timeout=timedelta(hours=4),
+            )
+            return WorkflowResult(
+                run_id=trigger.run_id,
+                task_type="implement_feature",
+                status="completed",
+                artifact_ref=impl_result.artifact_ref,
+            )
+
+        elif trigger.task_type == "enhancement_review":
+            if not trigger.enhancement_review:
+                raise ValueError("enhancement_review required for enhancement_review task")
+
+            from agents.orchestrator.activities import load_enhancement_doc, load_feature_plan  # noqa: PLC0415
+
+            inp_er: EnhancementReviewInput = trigger.enhancement_review
+            feature_branch = _feature_branch_name(trigger.run_id)
+
+            feature_plan = await workflow.execute_activity(
+                load_feature_plan,
+                f"runs/{inp_er.source_run_id}/openshift-feature-plan.json",
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(initial_interval=timedelta(seconds=2), backoff_coefficient=2.0, maximum_attempts=3),
+            )
+
+            epic: JiraEpic = await workflow.execute_child_workflow(
+                EnsureEpicWorkflow.run,
+                SDLCFeatureInput(
+                    jira_epic_id=inp_er.jira_epic_id,
+                    feature_description=inp_er.feature_description,
+                    target_ocp_version=inp_er.target_ocp_version,
+                    staging_github_org=inp_er.staging_github_org,
+                    enhancement_repo=inp_er.enhancement_repo,
+                ),
+                id=f"{trigger.run_id}-ensure-epic",
+                task_queue="jira-agent",
+                execution_timeout=timedelta(minutes=10),
+            )
+
+            pr_input = EnhancementPRInput(
+                repo=inp_er.enhancement_repo,
+                base_branch="main",
+                jira_epic_key=epic.key,
+            )
+
+            enhancement_pr = await workflow.execute_child_workflow(
+                EnhancementWorkflow.run,
+                args=[epic, feature_plan, pr_input, feature_branch, inp_er.target_ocp_version, trigger.run_id],
+                id=f"{trigger.run_id}-enhancement",
+                task_queue="enhancement-agent",
+                execution_timeout=timedelta(minutes=15),
+            )
+            workflow.logger.info("Enhancement PR: %s", enhancement_pr.url)
+
+            url_parts = enhancement_pr.url.rstrip("/").split("/")
+            enhancement_repo_slug = f"{url_parts[-4]}/{url_parts[-3]}"
+            enhancement_pr_number = int(url_parts[-1])
+
+            enhancement_doc = await workflow.execute_activity(
+                load_enhancement_doc,
+                f"runs/{trigger.run_id}/enhancement-doc.json",
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(initial_interval=timedelta(seconds=2), backoff_coefficient=2.0, maximum_attempts=3),
+            )
+            enhancement_fork_slug = f"{inp_er.staging_github_org}/{inp_er.enhancement_repo.split('/')[-1]}"
+            _enh_title = re.sub(r"^\[.*?\]\s*", "", enhancement_pr.title)
+            enhancement_feature_slug = re.sub(r"[^a-z0-9]+", "-", _enh_title.lower()).strip("-")[:80]
+
+            approval_input = EnhancementApprovalInput(
+                repo_slug=enhancement_repo_slug,
+                pr_number=enhancement_pr_number,
+                fork_slug=enhancement_fork_slug,
+                feature_branch=feature_branch,
+                feature_slug=enhancement_feature_slug,
+                enhancement_doc=enhancement_doc,
+                epic=epic,
+                feature_plan=feature_plan,
+            )
+
+            approval_result: str = await workflow.execute_child_workflow(
+                WaitForEnhancementApprovalWorkflow.run,
+                args=[approval_input],
+                id=f"{trigger.run_id}-wait-enhancement",
+                task_queue="enhancement-agent",
+                execution_timeout=timedelta(days=30),
+            )
+
+            return WorkflowResult(
+                run_id=trigger.run_id,
+                task_type="enhancement_review",
+                status="completed",
+                artifact_ref=f"runs/{trigger.run_id}/enhancement-doc.json",
+            )
+
         else:
             workflow.logger.warning("Unknown task_type=%s — skipping", trigger.task_type)
             return WorkflowResult(
@@ -238,9 +362,37 @@ class FullSDLCWorkflow:
         enhancement_repo_slug = f"{url_parts[-4]}/{url_parts[-3]}"
         enhancement_pr_number = int(url_parts[-1])
 
+        # Load the enhancement doc and derive fork/feature slugs for comment processing
+        from agents.orchestrator.activities import load_enhancement_doc  # noqa: PLC0415
+
+        enhancement_doc_for_approval = await workflow.execute_activity(
+            load_enhancement_doc,
+            f"runs/{run_id}/enhancement-doc.json",
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_attempts=3,
+            ),
+        )
+        enhancement_fork_slug = f"{feature_input.staging_github_org}/{feature_input.enhancement_repo.split('/')[-1]}"
+        _enh_title = re.sub(r"^\[.*?\]\s*", "", enhancement_pr.title)
+        enhancement_feature_slug = re.sub(r"[^a-z0-9]+", "-", _enh_title.lower()).strip("-")[:80]
+
+        approval_input = EnhancementApprovalInput(
+            repo_slug=enhancement_repo_slug,
+            pr_number=enhancement_pr_number,
+            fork_slug=enhancement_fork_slug,
+            feature_branch=feature_branch,
+            feature_slug=enhancement_feature_slug,
+            enhancement_doc=enhancement_doc_for_approval,
+            epic=epic,
+            feature_plan=feature_plan,
+        )
+
         approval_result: str = await workflow.execute_child_workflow(
             WaitForEnhancementApprovalWorkflow.run,
-            args=[enhancement_repo_slug, enhancement_pr_number],
+            args=[approval_input],
             id=f"{run_id}-wait-enhancement",
             task_queue="enhancement-agent",
             execution_timeout=timedelta(days=30),
@@ -258,6 +410,43 @@ class FullSDLCWorkflow:
             return StagingPlan(feature_id=run_id, repos=[])
 
         workflow.logger.info("Enhancement PR approved; proceeding to story planning")
+
+        # Phase D.5 — Fork all identified repos into the staging org
+        unique_slugs = list(dict.fromkeys(
+            step.repo for step in feature_plan.pr_sequence
+        ))
+        await workflow.execute_child_workflow(
+            ForkReposWorkflow.run,
+            args=[unique_slugs, feature_input.staging_github_org],
+            id=f"{run_id}-fork-repos",
+            task_queue="github-agent",
+            execution_timeout=timedelta(minutes=10),
+        )
+        workflow.logger.info("Phase D.5: forked %d repos into %s", len(unique_slugs), feature_input.staging_github_org)
+
+        # Phase D.6 — Reconcile forks declared in the approved enhancement doc
+        enhancement_doc_ref = f"runs/{run_id}/enhancement-doc.json"
+        enhancement_doc = await workflow.execute_activity(
+            load_enhancement_doc,
+            enhancement_doc_ref,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_attempts=3,
+            ),
+        )
+        if enhancement_doc.repos_to_fork:
+            workflow.logger.info(
+                "Phase D.5: reconciling %d repos from enhancement doc", len(enhancement_doc.repos_to_fork)
+            )
+            await workflow.execute_child_workflow(
+                ForkReposWorkflow.run,
+                args=[enhancement_doc.repos_to_fork, feature_input.staging_github_org],
+                id=f"{run_id}-fork-repos-reconcile",
+                task_queue="github-agent",
+                execution_timeout=timedelta(minutes=10),
+            )
 
         # Phase E — Story proposal and human refinement loop
         from agents.requirements_agent.activities import propose_stories  # noqa: PLC0415
@@ -312,7 +501,17 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(minutes=10),
         )
 
-        # Phase H — Start long-lived PR monitors (fire-and-forget)
+        # Phase H — Generate and commit code changes (one PR per repo)
+        await workflow.execute_child_workflow(
+            ImplementFeatureWorkflow.run,
+            args=[staging_plan, feature_plan, feature_input.feature_description, run_id],
+            id=f"{run_id}-implement-feature",
+            task_queue="github-agent",
+            execution_timeout=timedelta(hours=4),
+        )
+        workflow.logger.info("Phase H: code generation complete for %d repos", len(staging_plan.repos))
+
+        # Phase I — Start long-lived PR monitors (fire-and-forget, watches for human comments)
         for staging_repo in staging_plan.repos:
             repo_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
             await workflow.start_child_workflow(
