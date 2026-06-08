@@ -148,12 +148,21 @@ class WaitForEnhancementApprovalWorkflow:
                 workflow.logger.info("Enhancement PR %s#%d closed without merge", repo_slug, pr_number)
                 return "closed"
 
-            new_comments: list[dict] = await workflow.execute_activity(
+            raw_comments: list = await workflow.execute_activity(
                 fetch_enhancement_pr_comments,
                 args=[repo_slug, pr_number, last_seen_comment_count],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=_STANDARD_RETRY,
+                result_type=list,
             )
+
+            # Normalise: older history may contain plain strings instead of dicts
+            new_comments: list[dict] = []
+            for c in raw_comments:
+                if isinstance(c, dict):
+                    new_comments.append(c)
+                elif isinstance(c, str):
+                    new_comments.append({"author": "unknown", "body": c})
 
             if new_comments:
                 workflow.logger.info(

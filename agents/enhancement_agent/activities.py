@@ -101,7 +101,7 @@ async def fetch_enhancement_pr_comments(
     repo_slug: str,
     pr_number: int,
     since_count: int,
-) -> list[dict]:
+) -> list:
     settings = EnhancementAgentSettings()
     activity.logger.info("Fetching comments on %s#%d since count %d", repo_slug, pr_number, since_count)
     comments = enhancement_client.get_pr_comments(repo_slug, pr_number, since_count, settings)
