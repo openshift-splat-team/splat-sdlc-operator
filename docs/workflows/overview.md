@@ -12,7 +12,7 @@ The orchestrator (`SDLCOrchestratorWorkflow`) dispatches work based on the `task
 | `review` | LLM-review a pull request and post inline comments | `github-agent` | `github_pr_url` (string) | [review.md](review.md) |
 | `create_pr` | Open a pull request on GitHub/Gitea | `github-agent` | `CreatePRInput` | [create-pr.md](create-pr.md) |
 | `openshift_feature` | Analyse an OpenShift feature and produce an implementation plan | `openshift-agent` | `OpenShiftFeatureInput` | [openshift-feature.md](openshift-feature.md) |
-| `full_sdlc` | End-to-end feature lifecycle with human gates | `orchestrator` | `SDLCFeatureInput` | [full-sdlc.md](full-sdlc.md) |
+| `full_sdlc` | End-to-end feature lifecycle: epic, enhancement doc, human approval, fork repos, feature analysis, stories, staging PRs, code gen, PR monitors | `orchestrator` | `SDLCFeatureInput` | [full-sdlc.md](full-sdlc.md) |
 | `implement_feature` | Generate code across repos from a staging plan | `github-agent` | `ImplementFeatureInput` | [implement-feature.md](implement-feature.md) |
 | `enhancement_review` | Re-enter the enhancement review cycle for a previous run | `enhancement-agent` | `EnhancementReviewInput` | [enhancement-review.md](enhancement-review.md) |
 

@@ -10,12 +10,13 @@ Trigger (CLI / future: webhook)
         │
         ├── FullSDLCWorkflow                          full end-to-end OpenShift feature flow
         │     ├── EnsureEpicWorkflow                  [jira-agent]       fetch or create Jira epic
-        │     ├── OpenShiftFeatureWorkflow             [openshift-agent]  identify affected repos, produce plan
-        │     ├── EnhancementWorkflow                  [enhancement-agent] generate & PR enhancement doc
+        │     ├── EnhancementWorkflow                  [enhancement-agent] generate enhancement doc from epic context & open PR
         │     ├── WaitForEnhancementApprovalWorkflow   [enhancement-agent] poll PR until approved or closed
+        │     ├── ForkReposWorkflow                    [github-agent]     fork repos_to_fork from approved enhancement doc
+        │     ├── OpenShiftFeatureWorkflow             [openshift-agent]  analyse approved repos, produce plan
         │     ├── StoryRefinementWorkflow              [jira-agent]       propose stories, iterate with humans
         │     ├── CreateStoriesWorkflow                [jira-agent]       create, size, prioritize, link stories
-        │     ├── SetupStagingReposWorkflow            [github-agent]     fork repos, create branches & PRs
+        │     ├── SetupStagingReposWorkflow            [github-agent]     create branches & draft PRs
         │     ├── ImplementFeatureWorkflow              [github-agent]     LLM code gen per repo in dependency order
         │     │     └── CodeGenerationWorkflow (×N)     [github-agent]     generate + commit code for one repo
         │     └── MonitorPRWorkflow (×N)               [github-agent]     watch agent-hold label, process comments
@@ -45,38 +46,40 @@ flowchart TD
 
     A["**Phase A** · EnsureEpicWorkflow\n─────────────────────────\njira-agent\nFetch existing epic or create a new one"]
 
-    A --> B["**Phase B** · OpenShiftFeatureWorkflow\n─────────────────────────\nopenshift-agent\nIdentify affected repos\nProduce implementation plan\nDetermine CI requirements"]
+    A --> B["**Phase B** · EnhancementWorkflow\n─────────────────────────\nenhancement-agent\nGenerate enhancement doc from epic context\nLLM picks repos_to_fork\nFork enhancements repo → commit → open PR\nCreate design-doc-review story in Jira"]
 
-    B --> C["**Phase C** · EnhancementWorkflow\n─────────────────────────\nenhancement-agent\nGenerate enhancement doc via LLM\nFork enhancements repo → commit → open PR\nCreate design-doc-review story in Jira"]
+    B --> C{{"⏸ **Phase C** · Human Gate\n─────────────────────────\nWaitForEnhancementApprovalWorkflow\nPoll PR every 5 min\nReviewers can edit repos_to_fork"}}
 
-    C --> D{{"⏸ **Phase D** · Human Gate\n─────────────────────────\nWaitForEnhancementApprovalWorkflow\nPoll PR every 5 min"}}
+    C -- approved --> D
+    C -- closed --> ABORT([Mark story Won't Do · exit])
 
-    D -- approved --> E
-    D -- closed --> ABORT([Mark story Won't Do · exit])
+    D["**Phase D** · Load & Fork\n─────────────────────────\nLoad approved enhancement doc\nFork repos_to_fork into staging org"]
 
-    E["**Phase E** · StoryRefinementWorkflow\n─────────────────────────\njira-agent\nLLM proposes sized & prioritized stories\nPost proposals as Jira comment"]
+    D --> E["**Phase E** · OpenShiftFeatureWorkflow\n─────────────────────────\nopenshift-agent\nAnalyse approved repos\nSkips MCP discovery when repos pre-set\nProduce implementation plan\nDetermine CI requirements"]
 
-    E --> EG{{"⏸ **Phase E** · Human Gate\n─────────────────────────\nPoll epic comments every 5 min\nnew comments → LLM refines → re-post"}}
+    E --> F["**Phase F** · StoryRefinementWorkflow\n─────────────────────────\njira-agent\nLLM proposes sized & prioritized stories\nPost proposals as Jira comment"]
 
-    EG -- stories approved --> F
-    EG -- feedback --> E
+    F --> FG{{"⏸ **Phase F** · Human Gate\n─────────────────────────\nPoll epic comments every 5 min\nnew comments → LLM refines → re-post"}}
 
-    F["**Phase F** · CreateStoriesWorkflow\n─────────────────────────\njira-agent\nCreate stories in Jira\nSet story points, priority, dependency links"]
+    FG -- stories approved --> G
+    FG -- feedback --> F
 
-    F --> G["**Phase G** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nFork to staging org — sync main if exists\nCreate feature branch\nOpen draft PR → add agent-hold label"]
+    G["**Phase G** · CreateStoriesWorkflow\n─────────────────────────\njira-agent\nCreate stories in Jira\nSet story points, priority, dependency links"]
 
-    G --> H["**Phase H** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nLLM generates code changes\nCommit to feature branches\nRespects dependency order"]
+    G --> H["**Phase H** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nCreate feature branch\nOpen draft PR → add agent-hold label"]
 
-    H --> I{{"⏸ **Phase I** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
+    H --> I["**Phase I** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nLLM generates code changes\nCommit to feature branches\nRespects dependency order"]
 
-    I -- agent-hold dropped --> IC["LLM processes review comments\nApply file changes · post response\nRe-add agent-hold"]
-    IC --> I
-    I -- PR merged/closed --> DONE([Done])
+    I --> J{{"⏸ **Phase J** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
 
-    style D fill:#fff3cd,stroke:#856404,color:#000
-    style EG fill:#fff3cd,stroke:#856404,color:#000
-    style H fill:#e8f4f8,stroke:#0969da,color:#000
-    style I fill:#fff3cd,stroke:#856404,color:#000
+    J -- agent-hold dropped --> JC["LLM processes review comments\nApply file changes · post response\nRe-add agent-hold"]
+    JC --> J
+    J -- PR merged/closed --> DONE([Done])
+
+    style C fill:#fff3cd,stroke:#856404,color:#000
+    style FG fill:#fff3cd,stroke:#856404,color:#000
+    style I fill:#e8f4f8,stroke:#0969da,color:#000
+    style J fill:#fff3cd,stroke:#856404,color:#000
     style ABORT fill:#f8d7da,stroke:#842029,color:#000
     style DONE fill:#d1e7dd,stroke:#0f5132,color:#000
 ```
@@ -183,38 +186,40 @@ flowchart TD
 
     A["**Phase A** · EnsureEpicWorkflow\n─────────────────────────\njira-agent\nFetch existing epic or create a new one"]
 
-    A --> B["**Phase B** · OpenShiftFeatureWorkflow\n─────────────────────────\nopenshift-agent\nIdentify affected repos\nProduce implementation plan\nDetermine CI requirements"]
+    A --> B["**Phase B** · EnhancementWorkflow\n─────────────────────────\nenhancement-agent\nGenerate enhancement doc from epic context\nLLM picks repos_to_fork\nFork enhancements repo → commit → open PR\nCreate design-doc-review story in Jira"]
 
-    B --> C["**Phase C** · EnhancementWorkflow\n─────────────────────────\nenhancement-agent\nGenerate enhancement doc via LLM\nFork enhancements repo → commit → open PR\nCreate design-doc-review story in Jira"]
+    B --> C{{"⏸ **Phase C** · Human Gate\n─────────────────────────\nWaitForEnhancementApprovalWorkflow\nPoll PR every 5 min\nReviewers can edit repos_to_fork"}}
 
-    C --> D{{"⏸ **Phase D** · Human Gate\n─────────────────────────\nWaitForEnhancementApprovalWorkflow\nPoll PR every 5 min"}}
+    C -- approved --> D
+    C -- closed --> ABORT([Mark story Won't Do · exit])
 
-    D -- approved --> E
-    D -- closed --> ABORT([Mark story Won't Do · exit])
+    D["**Phase D** · Load & Fork\n─────────────────────────\nLoad approved enhancement doc\nFork repos_to_fork into staging org"]
 
-    E["**Phase E** · StoryRefinementWorkflow\n─────────────────────────\njira-agent\nLLM proposes sized & prioritized stories\nPost proposals as Jira comment"]
+    D --> E["**Phase E** · OpenShiftFeatureWorkflow\n─────────────────────────\nopenshift-agent\nAnalyse approved repos\nSkips MCP discovery when repos pre-set\nProduce implementation plan\nDetermine CI requirements"]
 
-    E --> EG{{"⏸ **Phase E** · Human Gate\n─────────────────────────\nPoll epic comments every 5 min\nnew comments → LLM refines → re-post"}}
+    E --> F["**Phase F** · StoryRefinementWorkflow\n─────────────────────────\njira-agent\nLLM proposes sized & prioritized stories\nPost proposals as Jira comment"]
 
-    EG -- stories approved --> F
-    EG -- feedback --> E
+    F --> FG{{"⏸ **Phase F** · Human Gate\n─────────────────────────\nPoll epic comments every 5 min\nnew comments → LLM refines → re-post"}}
 
-    F["**Phase F** · CreateStoriesWorkflow\n─────────────────────────\njira-agent\nCreate stories in Jira\nSet story points, priority, dependency links"]
+    FG -- stories approved --> G
+    FG -- feedback --> F
 
-    F --> G["**Phase G** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nFork to staging org — sync main if exists\nCreate feature branch\nOpen draft PR → add agent-hold label"]
+    G["**Phase G** · CreateStoriesWorkflow\n─────────────────────────\njira-agent\nCreate stories in Jira\nSet story points, priority, dependency links"]
 
-    G --> H["**Phase H** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nLLM generates code changes\nCommit to feature branches\nRespects dependency order"]
+    G --> H["**Phase H** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nCreate feature branch\nOpen draft PR → add agent-hold label"]
 
-    H --> I{{"⏸ **Phase I** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
+    H --> I["**Phase I** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nLLM generates code changes\nCommit to feature branches\nRespects dependency order"]
 
-    I -- agent-hold dropped --> IC["LLM processes review comments\nApply file changes · post response\nRe-add agent-hold"]
-    IC --> I
-    I -- PR merged/closed --> DONE([Done])
+    I --> J{{"⏸ **Phase J** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
 
-    style D fill:#fff3cd,stroke:#856404,color:#000
-    style EG fill:#fff3cd,stroke:#856404,color:#000
-    style H fill:#e8f4f8,stroke:#0969da,color:#000
-    style I fill:#fff3cd,stroke:#856404,color:#000
+    J -- agent-hold dropped --> JC["LLM processes review comments\nApply file changes · post response\nRe-add agent-hold"]
+    JC --> J
+    J -- PR merged/closed --> DONE([Done])
+
+    style C fill:#fff3cd,stroke:#856404,color:#000
+    style FG fill:#fff3cd,stroke:#856404,color:#000
+    style I fill:#e8f4f8,stroke:#0969da,color:#000
+    style J fill:#fff3cd,stroke:#856404,color:#000
     style ABORT fill:#f8d7da,stroke:#842029,color:#000
     style DONE fill:#d1e7dd,stroke:#0f5132,color:#000
 ```

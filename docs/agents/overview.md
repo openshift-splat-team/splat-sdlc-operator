@@ -24,7 +24,7 @@ All settings classes inherit from `BaseAgentSettings` which provides Temporal co
 Routes incoming `WorkflowTrigger` messages to the correct child workflow based on `task_type`. Makes no LLM calls of its own. Hosts two workflow classes:
 
 - **`SDLCOrchestratorWorkflow`** -- dispatches to child workflows: `RequirementsWorkflow`, `ReviewWorkflow`, `CreatePRWorkflow`, `OpenShiftFeatureWorkflow`, `FullSDLCWorkflow`, `ImplementFeatureWorkflow`, and enhancement review flows.
-- **`FullSDLCWorkflow`** -- end-to-end SDLC pipeline: epic creation, requirements, feature analysis, enhancement doc, story planning, repo staging, code generation, and PR monitoring.
+- **`FullSDLCWorkflow`** -- end-to-end SDLC pipeline: epic creation, enhancement doc (from epic context), human approval, fork repos, feature analysis (scoped to approved repos), story planning, repo staging, code generation, and PR monitoring.
 
 Activities are limited to artifact loading: `load_feature_plan`, `load_enhancement_doc`, `load_staging_plan`.
 
@@ -67,7 +67,7 @@ Handles all GitHub/Gitea interactions: PR reviews, staging repo setup, code gene
 
 Performs feature impact analysis across the OpenShift repository ecosystem using an MCP dependency-tree server and LLM reasoning. Settings include MCP connection fields (`mcp_server_url`, `mcp_server_command`, `mcp_server_script`, `mcp_data_dir`).
 
-- `identify_affected_repos` -- queries the MCP dep-tree server for dependency scores, then renders `openshift_agent/identify_repos.md` prompt to select affected repos
+- `identify_affected_repos` -- when `OpenShiftFeatureInput.repos` is set, uses the provided repo list directly (skips MCP discovery); otherwise queries the MCP dep-tree server for dependency scores, then renders `openshift_agent/identify_repos.md` prompt to select affected repos
 - `fetch_repo_context` -- retrieves repo metadata and dependency information via the MCP server
 - `analyze_feature` -- renders `openshift_agent/analyze_feature.md` prompt, returns `OpenShiftFeaturePlan` with ordered PR sequence
 - `determine_ci_requirements` -- renders `openshift_agent/ci_requirements.md` prompt, returns CI job requirements
@@ -95,7 +95,9 @@ Manages story lifecycle in Jira: epic creation, story proposals with human appro
 
 Generates OpenShift Enhancement Proposals, opens PRs in the enhancements repo, and processes reviewer feedback in a long-running approval loop. Settings include `github_bot_user` (excluded from reviewer comments) and `enhancement_repo`. Hosts workflows: `EnhancementWorkflow`, `WaitForEnhancementApprovalWorkflow`.
 
-- `generate_enhancement_doc` -- renders `enhancement_agent/generate_doc.md` prompt with epic + feature plan + agent memories, returns `EnhancementDoc`
+The enhancement doc is generated from epic context alone -- it does not depend on a feature plan. The LLM selects `repos_to_fork` as part of the doc, and that list becomes the authoritative repo list after human approval.
+
+- `generate_enhancement_doc` -- renders `enhancement_agent/generate_doc.md` prompt with epic context + agent memories, returns `EnhancementDoc`
 - `store_enhancement_doc` -- persists the doc to S3
 - `submit_enhancement_pr` -- forks the enhancement repo, commits the doc, and opens a PR
 - `poll_enhancement_pr_state` -- checks PR merge/approval/close status

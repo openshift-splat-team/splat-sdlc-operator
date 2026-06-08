@@ -40,14 +40,15 @@ trigger.py
 Orchestrator (full_sdlc workflow)
     |
     |-- Phase A --> Jira Agent: EnsureEpicWorkflow
-    |-- Phase B --> OpenShift Agent: OpenShiftFeatureWorkflow
-    |-- Phase C --> Enhancement Agent: EnhancementWorkflow
-    |-- Phase D --> Enhancement Agent: WaitForEnhancementApprovalWorkflow (human gate)
-    |-- Phase E --> Jira Agent: StoryRefinementWorkflow (human gate)
-    |-- Phase F --> Jira Agent: CreateStoriesWorkflow
-    |-- Phase G --> GitHub Agent: StagingPRWorkflow
-    |-- Phase H --> GitHub Agent: ImplementFeatureWorkflow
-    '-- Phase I --> GitHub Agent: WaitForPRApprovalWorkflow (human gate)
+    |-- Phase B --> Enhancement Agent: EnhancementWorkflow (generates doc from epic context)
+    |-- Phase C --> Enhancement Agent: WaitForEnhancementApprovalWorkflow (human gate)
+    |-- Phase D --> Load approved enhancement doc, fork repos_to_fork (GitHub Agent)
+    |-- Phase E --> OpenShift Agent: OpenShiftFeatureWorkflow (scoped to approved repos)
+    |-- Phase F --> Jira Agent: StoryRefinementWorkflow (human gate)
+    |-- Phase G --> Jira Agent: CreateStoriesWorkflow
+    |-- Phase H --> GitHub Agent: SetupStagingReposWorkflow
+    |-- Phase I --> GitHub Agent: ImplementFeatureWorkflow
+    '-- Phase J --> GitHub Agent: MonitorPRWorkflow (human gate)
 ```
 
 Activities within each agent store and retrieve structured artifacts from
