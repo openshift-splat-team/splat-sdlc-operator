@@ -17,6 +17,8 @@ class BaseAgentSettings(BaseSettings):
     litellm_model: str = "openai/gpt-4o"
     llm_api_key: str = Field(default="", description="API key for the configured LLM provider; not required for Ollama")
     llm_api_base: str | None = Field(default=None, description="Override API base URL (e.g. http://localhost:11434 for Ollama)")
+    vertex_project: str | None = Field(default=None, description="GCP project ID for Vertex AI (e.g. my-gcp-project)")
+    vertex_location: str | None = Field(default=None, description="Vertex AI region (e.g. us-central1)")
 
     minio_endpoint: str = "minio:9000"
     minio_access_key: str = "minioadmin"
@@ -56,6 +58,7 @@ class EnhancementAgentSettings(BaseAgentSettings):
 
     github_base_url: str = Field(default="https://api.github.com", description="GitHub API base URL; set to http://localhost:3000/api/v1 for local Gitea")
     github_token: str = Field(..., description="GitHub PAT for enhancement repo operations")
+    github_bot_user: str = Field(default="gitea", description="Username the bot posts as; its comments are excluded from reviewer feedback")
     staging_github_org: str = Field(..., description="GitHub org where enhancement forks are created")
     enhancement_repo: str = Field(default="openshift-splat-team/enhancements", description="owner/repo for enhancements")
 
@@ -65,3 +68,8 @@ class OpenShiftAgentSettings(BaseAgentSettings):
 
     github_base_url: str = Field(default="https://api.github.com", description="GitHub API base URL; set to http://localhost:3000/api/v1 for local Gitea")
     github_token: str = Field(..., description="GitHub PAT for reading openshift org repos")
+
+    mcp_server_url: str = Field(default="", description="SSE URL for the openshift-dep-tree MCP server (e.g. http://dep-tree:8000/sse)")
+    mcp_server_command: str = Field(default="python3", description="Interpreter to launch the openshift-dep-tree MCP server subprocess (stdio fallback)")
+    mcp_server_script: str = Field(default="", description="Absolute path to openshift-dep-tree mcp_server.py (stdio fallback)")
+    mcp_data_dir: str = Field(default="", description="Override MCP_DATA_DIR for data file location; empty uses script's directory")

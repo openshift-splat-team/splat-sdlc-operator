@@ -1,0 +1,55 @@
+# Per-agent LLM model configuration.
+#
+# Set LLM_CONFIG_PATH=./llm_config.yaml in your .env to activate this file.
+# Workers load it at startup. Any agent not listed here falls back to the
+# LITELLM_MODEL / LLM_API_KEY / LLM_API_BASE environment variables.
+#
+# Model string format follows LiteLLM conventions:
+#   ollama/<model>              local Ollama
+#   openai/<model>              OpenAI or any OpenAI-compatible server
+#   anthropic/<model>           Anthropic Claude
+#   vertex_ai/<model>           Google Vertex AI (requires vertex_project + vertex_location)
+#                               e.g. vertex_ai/gemini-2.5-pro, vertex_ai/gemini-2.0-flash
+#
+# api_key and api_base are optional — omit them to inherit from env vars.
+# For Vertex AI, set vertex_project and vertex_location below, or via
+# VERTEX_PROJECT / VERTEX_LOCATION env vars. Authentication uses ADC
+# (gcloud auth application-default login) or GOOGLE_APPLICATION_CREDENTIALS.
+
+default:
+  model: ""             # empty = use LITELLM_MODEL env var
+  api_key: ""           # empty = use LLM_API_KEY env var
+  api_base: null        # null  = use LLM_API_BASE env var
+  vertex_project: null  # GCP project ID (e.g. my-gcp-project); or set VERTEX_PROJECT env var
+  vertex_location: null # Vertex AI region (e.g. us-central1); or set VERTEX_LOCATION env var
+
+agents:
+  # Orchestrator routes tasks to other agents; typically no LLM calls of its own.
+  orchestrator:
+    model: ""
+
+  # Fetches Jira epics and produces structured requirement specifications.
+  # Benefits from a highly capable model for accurate decomposition.
+  requirements-agent:
+    model: ""
+    # api_key: "sk-ant-..."
+    # api_base: null
+
+  # Analyzes GitHub PRs and posts inline review comments.
+  github-agent:
+    model: ""
+
+  # Generates OpenShift enhancement documents and manages the PR lifecycle.
+  # Long-form structured writing benefits from a capable model.
+  enhancement-agent:
+    model: ""
+
+  # Identifies affected repos, analyzes feature impact, determines CI requirements.
+  # Complex multi-step reasoning — consider a larger/smarter model here.
+  openshift-agent:
+    model: ""
+
+  # Proposes, sizes, and prioritizes Jira stories; processes human feedback.
+  # Lower complexity tasks — a smaller/faster model can work well here.
+  jira-agent:
+    model: ""
