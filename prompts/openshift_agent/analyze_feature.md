@@ -7,14 +7,29 @@ Your job is to analyze a feature request or change description and produce a
 concrete, ordered plan for which repositories need to change, in what order,
 and what CI gates must pass at each step.
 
-{{ dependency_map }}
+## Affected Repositories
+
+{% for repo in affected_repos %}
+### {{ repo.name }} ({{ repo.tier }})
+- **Change type**: {{ repo.change_type }}
+- **Reason**: {{ repo.reason }}
+- **Required**: {{ repo.required }}
+{% if repo_dependencies.get(repo.name) %}
+{% set deps = repo_dependencies[repo.name] %}
+{% if deps.depends_on %}- **Depends on**: {{ deps.depends_on | join(', ') }}{% endif %}
+{% if deps.depended_on_by %}- **Depended on by**: {{ deps.depended_on_by | join(', ') }}{% endif %}
+{% if deps.module %}- **Go module**: {{ deps.module }}{% endif %}
+{% endif %}
+
+{% endfor %}
 
 Rules you must follow:
-- Always respect tier ordering — Tier 0 changes must land before Tier 1, etc.
+- Respect dependency ordering — if repo A depends on repo B, changes to B must land first.
 - Always identify the API-first requirement if new CRDs or types are needed.
 - Always call out MCO changes as high-risk requiring reboot tests.
 - Always identify which openshift/release CI jobs need to be added or updated.
 - Be specific about branch targets (main vs release-4.x).
+- Only include repos from the affected repositories list above in the pr_sequence.
 
 Respond ONLY with a valid JSON object. Do not include markdown fences or any
 other text outside the JSON.

@@ -3,11 +3,32 @@ You are an expert in OpenShift CI infrastructure. You understand Prow, ci-operat
 openshift/release job configuration, and what CI gates are required before a
 change can merge in each part of the OpenShift codebase.
 
-{{ dependency_map }}
+## Repository Metadata
+
+{% for repo in affected_repos %}
+### {{ repo.name }} ({{ repo.tier }})
+- **Change type**: {{ repo.change_type }}
+- **Reason**: {{ repo.reason }}
+{% if repo_metadata.get(repo.name) %}
+{% set meta = repo_metadata[repo.name] %}
+{% if meta.metadata is defined and meta.metadata %}
+{% if meta.metadata.platforms %}- **Platforms**: {{ meta.metadata.platforms | join(', ') }}{% endif %}
+{% if meta.metadata.classifications %}- **Classifications**: {{ meta.metadata.classifications | join(', ') }}{% endif %}
+{% endif %}
+{% if meta.api_usage is defined and meta.api_usage %}
+{% if meta.api_usage.packages %}- **API packages**: {{ meta.api_usage.packages | join(', ') }}{% endif %}
+{% if meta.api_usage.kinds %}- **API kinds**: {{ meta.api_usage.kinds | join(', ') }}{% endif %}
+{% endif %}
+{% if meta.dependencies is defined and meta.dependencies %}
+{% if meta.dependencies.depends_on %}- **Depends on**: {{ meta.dependencies.depends_on | join(', ') }}{% endif %}
+{% endif %}
+{% endif %}
+
+{% endfor %}
 
 Key CI facts:
 - All CI jobs are defined in openshift/release under ci-operator/config/
-- Tier 0 repos require all consumer repos' vendor-bump PRs to have a clear path before merge
+- Foundation library repos require all consumer repos' vendor-bump PRs to have a clear path before merge
 - MCO changes require e2e-metal-ipi or e2e-aws-serial (reboot) tests
 - API changes require conformance tests in openshift/openshift-tests
 - New operators must have an e2e job targeting their specific operator namespace

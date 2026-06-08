@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from temporalio import activity
 
 from agents.common import llm, prompts, storage
@@ -13,12 +11,7 @@ from agents.common.models import (
     RepoIdentificationResult,
 )
 from agents.common.settings import OpenShiftAgentSettings
-from agents.openshift_agent import repo_client
-
-# Load the dependency map once at import time — it's a static knowledge file.
-_DEPENDENCY_MAP = (
-    Path(__file__).parents[2] / "prompts" / "openshift_agent" / "knowledge" / "dependency_map.md"
-).read_text()
+from agents.openshift_agent import mcp_client, repo_client
 
 
 @activity.defn
@@ -26,12 +19,32 @@ async def identify_affected_repos(input: OpenShiftFeatureInput) -> RepoIdentific
     settings = OpenShiftAgentSettings()
     activity.logger.info("Identifying affected repos for: %s", input.feature_description[:80])
 
+    async with mcp_client.connect(settings) as client:
+        impact = await client.feature_impact(input.feature_description)
+
+    scored_repos = impact.get("results", [])
+    activity.logger.info("MCP returned %d scored candidates", len(scored_repos))
+
+    if not scored_repos:
+        activity.logger.warning("feature_impact_tool returned 0 candidates")
+        return RepoIdentificationResult(
+            repos=[], primary_repo="", api_change_required=False, mco_involved=False,
+        )
+
+    mcp_repo_names = {r["repo"] for r in scored_repos}
+
     messages = prompts.render(
         "openshift_agent/identify_repos.md",
-        dependency_map=_DEPENDENCY_MAP,
+        scored_repos=scored_repos,
         change_description=input.feature_description,
     )
-    return await llm.complete_structured(messages, settings, RepoIdentificationResult)
+    result = await llm.complete_structured(messages, settings, RepoIdentificationResult)
+
+    unknown = [r.name for r in result.repos if mcp_client._normalize_repo(r.name) not in mcp_repo_names]
+    if unknown:
+        activity.logger.warning("Dropping repos not in MCP dataset: %s", unknown)
+    result.repos = [r for r in result.repos if mcp_client._normalize_repo(r.name) in mcp_repo_names]
+    return result
 
 
 @activity.defn
@@ -43,14 +56,34 @@ async def analyze_feature(
     settings = OpenShiftAgentSettings()
     activity.logger.info("Analyzing feature plan for: %s", input.feature_description[:80])
 
+    repo_dependencies: dict[str, dict] = {}
+    async with mcp_client.connect(settings) as client:
+        for repo in repo_result.repos:
+            try:
+                deps = await client.get_repo_dependencies(repo.name)
+                repo_dependencies[repo.name] = deps
+            except Exception:
+                activity.logger.warning("Failed to fetch deps for %s", repo.name)
+                repo_dependencies[repo.name] = {}
+
+    affected_repos = [r.model_dump() for r in repo_result.repos]
+
     messages = prompts.render(
         "openshift_agent/analyze_feature.md",
-        dependency_map=_DEPENDENCY_MAP,
+        affected_repos=affected_repos,
+        repo_dependencies=repo_dependencies,
         feature_description=input.feature_description,
         target_ocp_version=input.target_ocp_version,
         jira_context=jira_context,
     )
-    return await llm.complete_structured(messages, settings, OpenShiftFeaturePlan)
+    plan = await llm.complete_structured(messages, settings, OpenShiftFeaturePlan)
+
+    known_repos = {r.name for r in repo_result.repos}
+    unknown = [step.repo for step in plan.pr_sequence if step.repo not in known_repos]
+    if unknown:
+        activity.logger.warning("Dropping pr_sequence steps with unknown repos: %s", unknown)
+    plan.pr_sequence = [step for step in plan.pr_sequence if step.repo in known_repos]
+    return plan
 
 
 @activity.defn
@@ -61,10 +94,20 @@ async def determine_ci_requirements(
     settings = OpenShiftAgentSettings()
     activity.logger.info("Determining CI requirements for %d repos", len(affected_repos))
 
+    repo_metadata: dict[str, dict] = {}
+    async with mcp_client.connect(settings) as client:
+        for repo in affected_repos:
+            try:
+                info = await client.get_repo_info(repo.name)
+                repo_metadata[repo.name] = info
+            except Exception:
+                activity.logger.warning("Failed to fetch metadata for %s", repo.name)
+                repo_metadata[repo.name] = {}
+
     messages = prompts.render(
         "openshift_agent/ci_requirements.md",
-        dependency_map=_DEPENDENCY_MAP,
         affected_repos=affected_repos,
+        repo_metadata=repo_metadata,
         feature_description=input.feature_description,
     )
     return await llm.complete_structured(messages, settings, CIRequirements)
