@@ -6,12 +6,14 @@ from pydantic import BaseModel, Field
 
 
 class WorkflowTrigger(BaseModel):
-    task_type: Literal["requirements", "review", "create_pr", "openshift_feature", "full_sdlc"]
+    task_type: Literal["requirements", "review", "create_pr", "openshift_feature", "full_sdlc", "implement_feature", "enhancement_review"]
     jira_epic_id: str | None = None
     github_pr_url: str | None = None
     github_create_pr: "CreatePRInput | None" = None
     openshift_feature: "OpenShiftFeatureInput | None" = None
     full_sdlc: "SDLCFeatureInput | None" = None
+    implement_feature: "ImplementFeatureInput | None" = None
+    enhancement_review: "EnhancementReviewInput | None" = None
     run_id: str = Field(..., description="Unique ID for this workflow run; used as artifact key prefix")
 
 
@@ -33,6 +35,7 @@ class JiraEpic(BaseModel):
     parent_key: str | None = None
     parent_summary: str | None = None
     parent_description: str | None = None
+    target_ocp_version: str | None = None
 
 
 class Story(BaseModel):
@@ -219,6 +222,7 @@ class EnhancementDoc(BaseModel):
     graduation_criteria: str = ""
     drawbacks: list[str] = []
     alternatives: list[str] = []
+    repos_to_fork: list[str] = []
     artifact_ref: str = ""
 
 
@@ -228,6 +232,22 @@ class EnhancementPRInput(BaseModel):
     base_branch: str = "main"
     jira_epic_key: str
     jira_story_key: str | None = None
+
+
+class EnhancementApprovalInput(BaseModel):
+    repo_slug: str = Field(..., description="Base repo slug, e.g. openshift-splat-team/enhancements")
+    pr_number: int
+    fork_slug: str = Field(..., description="Fork slug where commits go, e.g. staging-org/enhancements")
+    feature_branch: str
+    feature_slug: str = Field(..., description="Dir name under enhancements/, e.g. add-machine-config-pool")
+    enhancement_doc: EnhancementDoc
+    epic: "JiraEpic"
+    feature_plan: "OpenShiftFeaturePlan"
+
+
+class EnhancementCommentResult(BaseModel):
+    response_body: str
+    revised_doc: EnhancementDoc
 
 
 # ── Story planning models ─────────────────────────────────────────────────────
@@ -246,6 +266,19 @@ class StoryPlan(BaseModel):
     stories: list[SizedStory]
     sizing_rationale: str = ""
     artifact_ref: str = ""
+
+
+# ── Comment processing models ─────────────────────────────────────────────────
+
+class FileChange(BaseModel):
+    path: str
+    content: str
+    commit_message: str
+
+
+class CommentProcessingResult(BaseModel):
+    response_body: str
+    file_changes: list[FileChange] = []
 
 
 # ── Staging / repo management models ─────────────────────────────────────────
@@ -268,6 +301,30 @@ class StagingPlan(BaseModel):
     artifact_ref: str = ""
 
 
+# ── Code generation / implementation models ───────────────────────────────────
+
+class RepoPRBundle(BaseModel):
+    """All PRSteps for a single repo collapsed into one implementation unit."""
+    repo: str
+    tier: str
+    steps: list[PRStep]
+    risk: Literal["low", "medium", "high"]
+    ci_requirements: list[str]
+    blocked_by_repos: list[str]
+
+
+class CodeGenerationResult(BaseModel):
+    repo: str
+    files_changed: list[str]
+    commit_messages: list[str]
+
+
+class FeatureImplementationResult(BaseModel):
+    feature_id: str
+    results: list[CodeGenerationResult]
+    artifact_ref: str = ""
+
+
 class PRMonitorEvent(BaseModel):
     repo_slug: str
     pr_number: int
@@ -279,12 +336,45 @@ class PRMonitorEvent(BaseModel):
 
 # ── Full SDLC trigger model ───────────────────────────────────────────────────
 
+class ImplementFeatureInput(BaseModel):
+    feature_id: str
+    staging_plan_ref: str = Field(..., description="MinIO artifact key for the StagingPlan")
+    feature_plan_ref: str = Field(..., description="MinIO artifact key for the OpenShiftFeaturePlan")
+    feature_description: str
+
+
 class SDLCFeatureInput(BaseModel):
     jira_epic_id: str | None = Field(default=None, description="Existing epic key; creates one if absent")
     feature_description: str
     target_ocp_version: str | None = None
     staging_github_org: str = Field(..., description="GitHub org where forks are created")
     enhancement_repo: str = "openshift-splat-team/enhancements"
+
+
+class EnhancementReviewInput(BaseModel):
+    source_run_id: str = Field(..., description="Run ID of a previous full_sdlc run whose feature plan to reuse")
+    jira_epic_id: str = Field(..., description="Existing Jira epic key")
+    feature_description: str
+    target_ocp_version: str | None = None
+    staging_github_org: str = Field(..., description="GitHub org where forks are created")
+    enhancement_repo: str = "openshift-splat-team/enhancements"
+
+
+# ── Agent memory models ──────────────────────────────────────────────────────
+
+class MemoryEntry(BaseModel):
+    id: str
+    agent: str
+    category: Literal["reviewer_preference", "architectural_decision", "observation", "process_note"]
+    content: str
+    tags: list[str] = []
+    source_run_id: str = ""
+    created_at: str = ""
+
+
+class MemoryIndex(BaseModel):
+    agent: str
+    entries: list[MemoryEntry] = []
 
 
 # ── Orchestrator models ───────────────────────────────────────────────────────
