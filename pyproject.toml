@@ -29,9 +29,13 @@ enhancement-agent = [
 ]
 openshift-agent = [
     "PyGithub>=2.3.0",
+    "mcp>=1.20.0",
 ]
 review-agent = [
     "PyGithub>=2.3.0",
+]
+vertex-ai = [
+    "google-cloud-aiplatform>=1.60.0",
 ]
 dev = [
     "pytest>=8.2.0",
@@ -44,6 +48,7 @@ dev = [
     # Agent optional deps — needed locally for trigger.py and dev-* worker targets.
     "PyGithub>=2.3.0",
     "jira>=3.8.0",
+    "mcp>=1.20.0",
 ]
 
 [build-system]

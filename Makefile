@@ -1,9 +1,10 @@
-.PHONY: dev dev-down dev-build dev-logs dev-trigger \
-        gitea-token gitea-setup \
+.PHONY: dev dev-down dev-build dev-logs dev-reload dev-rebuild dev-restart dev-trigger \
+        gitea-token gitea-setup gitea-seed-repos gitea-mirror-repo gitea-reviewer \
         jira-seed jira-seed-force \
         cluster cluster-down cluster-status build load deploy rollout \
         ollama-logs ollama-model \
         port-forward dev-orchestrator dev-requirements dev-github trigger \
+        trigger-enhancement-review \
         test test-integration lint fmt secrets-template clean
 
 CLUSTER_NAME  := sdlc
@@ -12,6 +13,8 @@ IMAGES        := sdlc/base sdlc/orchestrator sdlc/requirements-agent sdlc/github
 COMPOSE       := podman-compose
 
 # ── Local dev (compose) ───────────────────────────────────────────────────────
+
+WORKERS := orchestrator requirements-agent github-agent openshift-agent jira-agent enhancement-agent
 
 dev: dev-build
 	$(COMPOSE) up
@@ -25,14 +28,33 @@ dev-build:
 dev-logs:
 	$(COMPOSE) logs -f
 
+# Restart only the worker containers (picks up code changes via bind mounts).
+# Infrastructure (Temporal, MinIO, Gitea, Ollama) stays running.
+dev-reload:
+	$(COMPOSE) restart $(WORKERS)
+
+# Rebuild and restart workers only (needed after pyproject.toml / uv.lock changes).
+dev-rebuild:
+	$(COMPOSE) build $(WORKERS)
+	$(COMPOSE) up -d $(WORKERS)
+
+# Restart a single worker: make dev-restart W=orchestrator
+dev-restart:
+ifndef W
+	@echo "Usage: make dev-restart W=<worker>"; echo "Workers: $(WORKERS)"; exit 1
+else
+	$(COMPOSE) restart $(W)
+endif
+
 # Run trigger script inside the compose network
 dev-trigger:
 	$(COMPOSE) run --rm orchestrator python scripts/trigger.py
 
 # ── Gitea (local GitHub simulator) ───────────────────────────────────────────
-# Run 'make gitea-setup' once after 'make dev' to create the admin user, API
-# token, and staging org. Uses exec inside the running container to avoid
-# cross-container SQLite lock issues with podman-compose networking.
+# Run once after 'make dev':
+#   1. make gitea-setup      — create admin user, API token, orgs
+#   2. make gitea-seed-repos — create source repos the workflows fork/PR against
+# Uses exec inside the running container to avoid SQLite lock issues.
 
 gitea-setup:  ## Initialise Gitea: create admin user, API token, and staging org
 	@$(COMPOSE) exec --user 1000 gitea sh -c '\
@@ -60,10 +82,67 @@ gitea-setup:  ## Initialise Gitea: create admin user, API token, and staging org
 	    -d "{\"username\":\"staging\",\"visibility\":\"private\"}" > /dev/null 2>&1 || true; \
 	  echo "[gitea-setup] Done. Run: make gitea-token"'
 
+gitea-reviewer:  ## Create a 'reviewer' user for manual PR reviews (login: reviewer / reviewer123)
+	@curl -sf -u gitea:gitea123 http://localhost:3000/api/v1/admin/users \
+	  -H "Content-Type: application/json" \
+	  -d '{"username":"reviewer","password":"reviewer123","email":"reviewer@gitea.local","must_change_password":false}' > /dev/null 2>&1 \
+	  && echo "[gitea-reviewer] User 'reviewer' created" \
+	  || echo "[gitea-reviewer] User 'reviewer' already exists"; \
+	TEAM_ID=$$(curl -s -u gitea:gitea123 http://localhost:3000/api/v1/orgs/openshift-splat-team/teams \
+	  | python3 -c "import sys,json; print(next(t['id'] for t in json.load(sys.stdin) if t['name']=='Owners'))"); \
+	curl -sf -u gitea:gitea123 -X PUT "http://localhost:3000/api/v1/teams/$$TEAM_ID/members/reviewer" > /dev/null 2>&1; \
+	echo "[gitea-reviewer] Added to openshift-splat-team/Owners"; \
+	echo "[gitea-reviewer] Login: http://localhost:3000  reviewer / reviewer123"
+
+gitea-seed-repos:  ## Create orgs and staging repos in Gitea (openshift/* repos are mirrored on demand by the workflow)
+	@TOKEN=$$($(COMPOSE) exec gitea cat /data/gitea/gitea-token.txt 2>/dev/null | tr -d '[:space:]'); \
+	if [ -z "$$TOKEN" ]; then echo "No token — run 'make gitea-setup' first."; exit 1; fi; \
+	BASE=http://localhost:3000/api/v1; \
+	for org in openshift openshift-splat-team; do \
+	  curl -s -X POST "$$BASE/orgs" -H "Authorization: token $$TOKEN" \
+	    -H "Content-Type: application/json" \
+	    -d "{\"username\":\"$$org\",\"visibility\":\"public\"}" > /dev/null 2>&1 || true; \
+	  echo "[gitea-seed-repos] org: $$org"; \
+	done; \
+	curl -s -X POST "$$BASE/orgs/openshift-splat-team/repos" -H "Authorization: token $$TOKEN" \
+	  -H "Content-Type: application/json" \
+	  -d "{\"name\":\"enhancements\",\"private\":false,\"default_branch\":\"main\",\"auto_init\":true}" > /dev/null 2>&1 || true; \
+	echo "[gitea-seed-repos] local repo: openshift-splat-team/enhancements"; \
+	echo "[gitea-seed-repos] Done. openshift/* repos are mirrored from GitHub on demand by ForkReposWorkflow."
+
 # Print the Gitea API token (set as GITHUB_TOKEN in .env to use Gitea)
 gitea-token:  ## Print Gitea API token (paste into .env as GITHUB_TOKEN)
 	@$(COMPOSE) exec gitea cat /data/gitea/gitea-token.txt 2>/dev/null || \
 	  echo "No token found — run 'make gitea-setup' first."
+
+gitea-mirror-repo:  ## Mirror a GitHub repo into Gitea: make gitea-mirror-repo REPO=owner/name
+ifndef REPO
+	$(error REPO is required — e.g.: make gitea-mirror-repo REPO=openshift/enhancements)
+endif
+	@TOKEN=$$($(COMPOSE) exec gitea cat /data/gitea/gitea-token.txt 2>/dev/null | tr -d '[:space:]'); \
+	if [ -z "$$TOKEN" ]; then echo "No token — run 'make gitea-setup' first."; exit 1; fi; \
+	ORG=$$(echo "$(REPO)" | cut -d/ -f1); \
+	REPO_NAME=$$(echo "$(REPO)" | cut -d/ -f2); \
+	BASE=http://localhost:3000/api/v1; \
+	echo "[gitea-mirror-repo] Ensuring org $$ORG exists..."; \
+	curl -s -X POST "$$BASE/orgs" -H "Authorization: token $$TOKEN" \
+	  -H "Content-Type: application/json" \
+	  -d "{\"username\":\"$$ORG\",\"visibility\":\"public\"}" > /dev/null 2>&1 || true; \
+	echo "[gitea-mirror-repo] Mirroring github.com/$(REPO)..."; \
+	TMPFILE=$$(mktemp); \
+	HTTP_CODE=$$(curl -s -o "$$TMPFILE" -w "%{http_code}" -X POST "$$BASE/repos/migrate" \
+	  -H "Authorization: token $$TOKEN" \
+	  -H "Content-Type: application/json" \
+	  -d "{\"clone_addr\":\"https://github.com/$(REPO)\",\"repo_name\":\"$$REPO_NAME\",\"repo_owner\":\"$$ORG\",\"mirror\":true,\"mirror_interval\":\"8h\",\"private\":false}"); \
+	if [ "$$HTTP_CODE" = "201" ]; then \
+	  echo "[gitea-mirror-repo] Mirror created: http://localhost:3000/$(REPO)"; \
+	elif [ "$$HTTP_CODE" = "409" ]; then \
+	  echo "[gitea-mirror-repo] Already mirrored: http://localhost:3000/$(REPO)"; \
+	else \
+	  echo "[gitea-mirror-repo] Error (HTTP $$HTTP_CODE):"; \
+	  cat "$$TMPFILE"; echo; rm -f "$$TMPFILE"; exit 1; \
+	fi; \
+	rm -f "$$TMPFILE"
 
 # ── Jira simulator seed ───────────────────────────────────────────────────────
 
@@ -150,7 +229,10 @@ dev-openshift:
 	uv run python -m agents.openshift_agent.worker
 
 trigger:
-	uv run python scripts/trigger.py
+	uv run --extra dev python scripts/trigger.py full_sdlc
+
+trigger-enhancement-review:
+	uv run --extra dev python scripts/trigger.py enhancement_review
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 

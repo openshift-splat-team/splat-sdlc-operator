@@ -12,7 +12,8 @@ RUN uv sync --no-install-project \
     --extra github-agent \
     --extra jira-agent \
     --extra enhancement-agent \
-    --extra openshift-agent
+    --extra openshift-agent \
+    --extra vertex-ai
 
 # Fallback source copy (overridden by volume mount in compose)
 COPY agents ./agents

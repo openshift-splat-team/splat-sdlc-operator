@@ -25,7 +25,7 @@ Trigger (CLI / future: webhook)
         ├── CreatePRWorkflow      [github-agent]
         │     create_pr → store to MinIO
         └── OpenShiftFeatureWorkflow  [openshift-agent]
-              identify_repos → fetch_context → analyze (LLM) → ci_requirements → store to MinIO
+              identify_repos (MCP + LLM) → fetch_context → analyze (MCP + LLM) → ci_requirements → store to MinIO
 ```
 
 LiteLLM abstracts all LLM calls — swap providers (OpenAI, Anthropic, Ollama, etc.) via the `LITELLM_MODEL` env var with no code changes.
@@ -146,7 +146,7 @@ Analyzes an OpenShift feature description to identify which repositories are aff
 flowchart LR
     IN(["Feature description\nTarget OCP version\nOptional Jira epic"]) --> A
 
-    A["identify_affected_repos\n───────────────\nopenshift-agent · LLM\nIdentify repos by tier\nClassify change types\nFlag API + MCO impact"]
+    A["identify_affected_repos\n───────────────\nopenshift-agent · MCP + LLM\nQuery dep-tree for scored repos\nLLM selects from candidates\nFlag API + MCO impact"]
 
     A --> B["fetch_repo_context\n───────────────\nopenshift-agent · GitHub\nFetch go.mod, open PRs\nrepo topics per repo\nruns for top 3 repos"]
 
@@ -363,6 +363,11 @@ LLM_API_KEY=sk-...
 # Anthropic
 LITELLM_MODEL=anthropic/claude-sonnet-4-6
 LLM_API_KEY=sk-ant-...
+
+# Google Vertex AI (requires gcloud auth application-default login)
+LITELLM_MODEL=vertex_ai/gemini-2.5-pro
+VERTEX_PROJECT=my-gcp-project
+VERTEX_LOCATION=us-central1
 ```
 
 After editing `.env`, restart workers:
@@ -470,6 +475,63 @@ Remove the `JIRA_URL`, `JIRA_USER`, `JIRA_TOKEN`, and `JIRA_PROJECT_KEY` overrid
 
 ---
 
+## Per-agent LLM configuration
+
+By default every agent uses the global `LITELLM_MODEL` / `LLM_API_KEY` / `LLM_API_BASE` environment variables. To route specific agents to different models or providers, create a YAML config file and point `LLM_CONFIG_PATH` at it:
+
+```bash
+LLM_CONFIG_PATH=./llm_config.yaml   # add to .env
+```
+
+The file has a `default` block (overrides env vars for all agents) and an `agents` block keyed by Temporal task queue name:
+
+```yaml
+default:
+  model: openai/gpt-4o
+  api_key: sk-...
+
+agents:
+  openshift-agent:
+    model: anthropic/claude-sonnet-4-6
+    api_key: sk-ant-...
+  enhancement-agent:
+    model: vertex_ai/gemini-2.5-pro
+    vertex_project: my-gcp-project
+    vertex_location: us-central1
+```
+
+Any field omitted in an agent block inherits from `default`, which in turn inherits from the env vars. See `llm_config.yaml` for a fully commented example.
+
+---
+
+## OpenShift dep-tree MCP server
+
+The openshift-agent uses an external [MCP](https://modelcontextprotocol.io/) server (`openshift-dep-tree`) to identify which OpenShift repositories are affected by a feature change. The server exposes a pre-built knowledge base of ~274 repos with dependency graphs, API surface data, and scored relevance ranking — replacing the previous static dependency map.
+
+### Tools provided
+
+| Tool | Purpose |
+|---|---|
+| `feature_impact_tool` | Given a feature description, return repos ranked by relevance (0–100) with match reasons |
+| `get_repo_info` | Metadata, dependency graph, and API usage for a single repo |
+| `get_repo_dependencies` | Forward and reverse Go module dependencies |
+| `get_repo_api_usage` | Which `openshift/api` packages and CRD kinds a repo imports |
+| `list_repos` | Browse all repos with optional platform/classification filters |
+| `search_repos` | Substring search across repo names, descriptions, and topics |
+
+### Configuration
+
+The MCP server runs as a stdio subprocess spawned by the openshift-agent worker. Set these env vars:
+
+```bash
+MCP_SERVER_SCRIPT=/absolute/path/to/openshift-dep-tree/mcp_server.py   # required
+# MCP_DATA_DIR=/path/to/data   # optional; defaults to the script's directory
+```
+
+The `identify_affected_repos` activity calls `feature_impact_tool` with the Jira feature description, feeds the scored results to the LLM for final selection, and drops any LLM-hallucinated repos not present in the MCP dataset. The `analyze_feature` activity enriches the plan with per-repo dependency data from `get_repo_dependencies`.
+
+---
+
 ## Integration testing (Kind)
 
 Use this when testing Kubernetes manifests, NetworkPolicies, or production-like deployment config.
@@ -543,4 +605,44 @@ All config is via environment variables (`.env` for local dev, k8s Secrets for i
 | `JIRA_URL` / `JIRA_USER` / `JIRA_TOKEN` | Jira credentials (requirements-agent, jira-agent) |
 | `JIRA_PROJECT_KEY` | Project key for the local Jira simulator — issue keys will be `{KEY}-N` (e.g. `SDLC`) |
 | `ENHANCEMENT_REPO` | Enhancement proposals repo, default `openshift-splat-team/enhancements` |
+| `VERTEX_PROJECT` | GCP project ID for Vertex AI (e.g. `my-gcp-project`) |
+| `VERTEX_LOCATION` | Vertex AI region (e.g. `us-central1`); authentication uses ADC (`gcloud auth application-default login`) or `GOOGLE_APPLICATION_CREDENTIALS` |
+| `LLM_CONFIG_PATH` | Path to a YAML file with per-agent LLM overrides (see [Per-agent LLM configuration](#per-agent-llm-configuration)) |
+| `MCP_SERVER_SCRIPT` | Absolute path to `openshift-dep-tree` `mcp_server.py` — required for the openshift-agent (see [OpenShift dep-tree MCP server](#openshift-dep-tree-mcp-server)) |
+| `MCP_DATA_DIR` | Override the data directory for the MCP server; defaults to the script's own directory |
 | `MINIO_ENDPOINT` | MinIO API address |
+
+## Troubleshooting
+
+### `podman-compose up` fails with "could not find free subnet from subnet pools"
+
+On Red Hat / IBM corporate networks the VPN routes the entire `10.0.0.0/8` block
+through the wireless interface. Podman's default subnet pool lives inside that
+range, so every auto-allocated subnet collides with the VPN route.
+
+**Diagnose:**
+
+```bash
+ip route | grep "10.0.0.0/8"
+# If you see a line like:
+#   10.0.0.0/8 dev wlp9s0 proto kernel scope link src 10.x.x.x
+# then the VPN is consuming the entire 10.x range.
+```
+
+**Fix — create the compose network manually on a non-conflicting subnet:**
+
+```bash
+podman network create --subnet 172.30.0.0/24 agent-sdlc-workflow_default
+podman-compose up -d
+```
+
+If `172.30.0.0/24` is also taken, try another private range
+(e.g. `172.28.0.0/24`, `192.168.200.0/24`).
+
+**Cleanup — if a half-created pod is left behind from the failed start:**
+
+```bash
+podman pod rm -f pod_agent-sdlc-workflow   # remove the stale pod
+podman network rm agent-sdlc-workflow_default 2>/dev/null  # remove broken network if it exists
+# then re-create the network and start as above
+```

@@ -12,6 +12,7 @@ x-worker: &worker
     - ./agents:/app/agents:ro,z
     - ./prompts:/app/prompts:ro,z
     - ./scripts:/app/scripts:ro,z
+    - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-credentials.json}:/secrets/gcp-credentials.json:ro,z
   depends_on:
     temporal:
       condition: service_healthy
@@ -24,13 +25,15 @@ x-worker: &worker
 services:
 
   # ── Temporal ────────────────────────────────────────────────────────────────
-  # PostgreSQL backend for Temporal — ephemeral for local dev.
+  # PostgreSQL backend for Temporal — persisted via named volume.
   temporal-db:
     image: docker.io/library/postgres:16-alpine
     environment:
       - POSTGRES_USER=temporal
       - POSTGRES_PASSWORD=temporal
       - POSTGRES_DB=temporal
+    volumes:
+      - temporal-db-data:/var/lib/postgresql/data:z
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "temporal"]
       interval: 5s
@@ -81,6 +84,8 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    volumes:
+      - minio-data:/data:z
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
       interval: 10s
@@ -120,7 +125,7 @@ services:
     environment:
       - GITEA__database__DB_TYPE=sqlite3
       - GITEA__database__PATH=/data/gitea/gitea.db
-      - GITEA__server__ROOT_URL=http://localhost:3000/
+      - GITEA__server__ROOT_URL=http://gitea:3000/
       - GITEA__server__HTTP_PORT=3000
       - GITEA__security__INSTALL_LOCK=true
       - GITEA__log__LEVEL=warn
@@ -160,7 +165,8 @@ services:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=orchestrator
       - MINIO_ENDPOINT=minio:9000
-      - LLM_API_BASE=${LLM_API_BASE:-http://ollama:11434}
+      - LLM_API_BASE=${LLM_API_BASE:-}
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
 
   requirements-agent:
     <<: *worker
@@ -169,8 +175,9 @@ services:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=requirements-agent
       - MINIO_ENDPOINT=minio:9000
-      - LLM_API_BASE=${LLM_API_BASE:-http://ollama:11434}
+      - LLM_API_BASE=${LLM_API_BASE:-}
       - JIRA_URL=http://jira-simulator:8080
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
 
   github-agent:
     <<: *worker
@@ -179,7 +186,17 @@ services:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=github-agent
       - MINIO_ENDPOINT=minio:9000
-      - LLM_API_BASE=${LLM_API_BASE:-http://ollama:11434}
+      - LLM_API_BASE=${LLM_API_BASE:-}
+      - GITHUB_BASE_URL=http://gitea:3000/api/v1
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
+
+  dep-tree:
+    image: localhost/openshift-dep-tree:latest
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/sse', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   openshift-agent:
     <<: *worker
@@ -188,7 +205,13 @@ services:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=openshift-agent
       - MINIO_ENDPOINT=minio:9000
-      - LLM_API_BASE=${LLM_API_BASE:-http://ollama:11434}
+      - LLM_API_BASE=${LLM_API_BASE:-}
+      - GITHUB_BASE_URL=http://gitea:3000/api/v1
+      - MCP_SERVER_URL=http://dep-tree:8000/sse
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
+    depends_on:
+      dep-tree:
+        condition: service_healthy
 
   jira-agent:
     <<: *worker
@@ -197,8 +220,9 @@ services:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=jira-agent
       - MINIO_ENDPOINT=minio:9000
-      - LLM_API_BASE=${LLM_API_BASE:-http://ollama:11434}
+      - LLM_API_BASE=${LLM_API_BASE:-}
       - JIRA_URL=http://jira-simulator:8080
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
 
   enhancement-agent:
     <<: *worker
@@ -207,9 +231,13 @@ services:
       - TEMPORAL_HOST=temporal:7233
       - TEMPORAL_TASK_QUEUE=enhancement-agent
       - MINIO_ENDPOINT=minio:9000
-      - LLM_API_BASE=${LLM_API_BASE:-http://ollama:11434}
+      - LLM_API_BASE=${LLM_API_BASE:-}
+      - GITHUB_BASE_URL=http://gitea:3000/api/v1
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
 
 volumes:
+  temporal-db-data:
+  minio-data:
   ollama-data:
   gitea-data:
   jira-data:
