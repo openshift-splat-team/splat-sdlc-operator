@@ -194,6 +194,8 @@ def create_enhancement_pr(
         if not existing:
             raise
         pr = existing[0]
+    pr.add_to_labels("agent-hold")
+
     return CreatedPR(
         url=pr.html_url,
         number=pr.number,
