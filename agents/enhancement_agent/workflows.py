@@ -183,6 +183,14 @@ class WaitForEnhancementApprovalWorkflow:
                     retry_policy=_STANDARD_RETRY,
                 )
 
+                if input.run_id:
+                    await workflow.execute_activity(
+                        store_enhancement_doc,
+                        args=[result.revised_doc, input.run_id],
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_STANDARD_RETRY,
+                    )
+
                 await workflow.execute_activity(
                     post_enhancement_pr_comment,
                     args=[repo_slug, pr_number, result.response_body],

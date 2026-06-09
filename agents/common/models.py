@@ -241,6 +241,7 @@ class EnhancementApprovalInput(BaseModel):
     fork_slug: str = Field(..., description="Fork slug where commits go, e.g. staging-org/enhancements")
     feature_branch: str
     feature_slug: str = Field(..., description="Dir name under enhancements/, e.g. add-machine-config-pool")
+    run_id: str = Field(default="", description="Workflow run ID for persisting revised docs to S3")
     enhancement_doc: EnhancementDoc
     epic: "JiraEpic"
     feature_plan: "OpenShiftFeaturePlan"
