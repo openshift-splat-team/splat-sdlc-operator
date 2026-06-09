@@ -59,7 +59,9 @@ def create_story(draft: JiraStoryDraft, settings: JiraAgentSettings) -> JiraStor
     jira = _connect(settings)
 
     # Check if a story with the same summary already exists under the epic to be idempotent
-    jql = f'project = "{draft.epic_key.split("-")[0]}" AND summary ~ "{draft.title}" AND issuetype = Story'
+    safe_project = draft.epic_key.split("-")[0].replace("\\", "\\\\").replace('"', '\\"')
+    safe_title = draft.title.replace("\\", "\\\\").replace('"', '\\"')
+    jql = f'project = "{safe_project}" AND summary ~ "{safe_title}" AND issuetype = Story'
     existing = jira.search_issues(jql, maxResults=1)
     if existing:
         issue = existing[0]
