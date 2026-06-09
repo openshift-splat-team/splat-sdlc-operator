@@ -212,7 +212,7 @@ class SDLCOrchestratorWorkflow:
 
             enhancement_pr = await workflow.execute_child_workflow(
                 EnhancementWorkflow.run,
-                args=[epic, feature_plan, pr_input, feature_branch, inp_er.target_ocp_version, trigger.run_id],
+                args=[epic, pr_input, feature_branch, inp_er.target_ocp_version, trigger.run_id],
                 id=f"{trigger.run_id}-enhancement",
                 task_queue="enhancement-agent",
                 execution_timeout=timedelta(minutes=15),
