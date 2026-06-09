@@ -15,6 +15,7 @@ with workflow.unsafe.imports_passed_through():
         ImplementFeatureInput,
         JiraEpic,
         OpenShiftFeatureInput,
+        OpenShiftFeaturePlan,
         SDLCFeatureInput,
         StagingPlan,
         WorkflowResult,
