@@ -159,6 +159,39 @@ def commit_enhancement_doc(
     return resp.json()["commit"]["sha"]
 
 
+def _ensure_label(repo_slug: str, label_name: str, issue_number: int, settings: EnhancementAgentSettings) -> None:
+    """Create the label if needed and apply it to the issue/PR via REST API (Gitea-safe)."""
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"}
+
+    resp = requests.get(f"{base}/repos/{owner}/{name}/labels", headers=headers, timeout=10)
+    label_id = None
+    if resp.status_code == 200:
+        for lbl in resp.json():
+            if lbl["name"] == label_name:
+                label_id = lbl["id"]
+                break
+
+    if label_id is None:
+        resp = requests.post(
+            f"{base}/repos/{owner}/{name}/labels",
+            headers=headers,
+            json={"name": label_name, "color": "#856404"},
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            label_id = resp.json()["id"]
+
+    if label_id is not None:
+        requests.post(
+            f"{base}/repos/{owner}/{name}/issues/{issue_number}/labels",
+            headers=headers,
+            json={"labels": [label_id]},
+            timeout=10,
+        )
+
+
 def create_enhancement_pr(
     fork_slug: str,
     branch: str,
@@ -194,7 +227,7 @@ def create_enhancement_pr(
         if not existing:
             raise
         pr = existing[0]
-    pr.add_to_labels("agent-hold")
+    _ensure_label(base_repo, "agent-hold", pr.number, settings)
 
     return CreatedPR(
         url=pr.html_url,
