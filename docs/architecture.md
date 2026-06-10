@@ -42,7 +42,7 @@ Orchestrator (full_sdlc workflow)
     |-- Phase A --> Jira Agent: EnsureEpicWorkflow
     |-- Phase B --> Enhancement Agent: EnhancementWorkflow (generates doc from epic context)
     |-- Phase C --> Enhancement Agent: WaitForEnhancementApprovalWorkflow (human gate)
-    |-- Phase D --> Load approved enhancement doc, fork repos_to_fork (GitHub Agent)
+    |-- Phase D --> Mirror repos from GitHub into Gitea (Gitea only), load approved enhancement doc, fork repos_to_fork (GitHub Agent)
     |-- Phase E --> OpenShift Agent: OpenShiftFeatureWorkflow (scoped to approved repos)
     |-- Phase F --> Jira Agent: StoryRefinementWorkflow (human gate)
     |-- Phase G --> Jira Agent: CreateStoriesWorkflow

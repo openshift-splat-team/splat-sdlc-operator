@@ -59,8 +59,12 @@ make gitea-mirror-repo REPO=openshift/enhancements
 ```
 
 This creates the org (if needed), clones the repo from GitHub, and sets up
-an 8-hour mirror interval. The workflow also mirrors repos on demand during
-execution.
+an 8-hour mirror interval.
+
+> **Note:** During the full SDLC workflow, repos listed in `repos_to_fork` are
+> automatically mirrored from GitHub into Gitea by the `MirrorReposWorkflow`
+> (Phase D) before forking. The `make gitea-mirror-repo` command is only
+> needed for ad-hoc testing or mirroring repos outside the SDLC flow.
 
 ## Seeding Staging Repos
 

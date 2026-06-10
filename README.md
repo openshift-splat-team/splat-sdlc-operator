@@ -12,6 +12,7 @@ Trigger (CLI / future: webhook)
         │     ├── EnsureEpicWorkflow                  [jira-agent]       fetch or create Jira epic
         │     ├── EnhancementWorkflow                  [enhancement-agent] generate enhancement doc from epic context & open PR
         │     ├── WaitForEnhancementApprovalWorkflow   [enhancement-agent] poll PR until approved or closed
+        │     ├── MirrorReposWorkflow                   [github-agent]     mirror repos from GitHub into Gitea (Gitea only)
         │     ├── ForkReposWorkflow                    [github-agent]     fork repos_to_fork from approved enhancement doc
         │     ├── OpenShiftFeatureWorkflow             [openshift-agent]  analyse approved repos, produce plan
         │     ├── StoryRefinementWorkflow              [jira-agent]       propose stories, iterate with humans
@@ -53,7 +54,7 @@ flowchart TD
     C -- approved --> D
     C -- closed --> ABORT([Mark story Won't Do · exit])
 
-    D["**Phase D** · Load & Fork\n─────────────────────────\nLoad approved enhancement doc\nFork repos_to_fork into staging org"]
+    D["**Phase D** · Mirror, Load & Fork\n─────────────────────────\nMirror repos from GitHub into Gitea\n(Gitea only · repos that fail to mirror are dropped)\nLoad approved enhancement doc\nFork repos_to_fork into staging org"]
 
     D --> E["**Phase E** · OpenShiftFeatureWorkflow\n─────────────────────────\nopenshift-agent\nAnalyse approved repos\nSkips MCP discovery when repos pre-set\nProduce implementation plan\nDetermine CI requirements"]
 
@@ -193,7 +194,7 @@ flowchart TD
     C -- approved --> D
     C -- closed --> ABORT([Mark story Won't Do · exit])
 
-    D["**Phase D** · Load & Fork\n─────────────────────────\nLoad approved enhancement doc\nFork repos_to_fork into staging org"]
+    D["**Phase D** · Mirror, Load & Fork\n─────────────────────────\nMirror repos from GitHub into Gitea\n(Gitea only · repos that fail to mirror are dropped)\nLoad approved enhancement doc\nFork repos_to_fork into staging org"]
 
     D --> E["**Phase E** · OpenShiftFeatureWorkflow\n─────────────────────────\nopenshift-agent\nAnalyse approved repos\nSkips MCP discovery when repos pre-set\nProduce implementation plan\nDetermine CI requirements"]
 

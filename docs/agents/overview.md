@@ -44,12 +44,13 @@ Fetches Jira epics and produces structured requirement specifications via LLM. A
 
 **Task queue:** `github-agent` | **Settings:** `GitHubAgentSettings` | **Module:** `agents.github_agent.worker`
 
-Handles all GitHub/Gitea interactions: PR reviews, staging repo setup, code generation, and PR monitoring. Hosts multiple workflows: `ReviewWorkflow`, `CreatePRWorkflow`, `SetupStagingReposWorkflow`, `ForkReposWorkflow`, `ImplementFeatureWorkflow`, `CodeGenerationWorkflow`, `MonitorPRWorkflow`.
+Handles all GitHub/Gitea interactions: PR reviews, staging repo setup, code generation, and PR monitoring. Hosts multiple workflows: `ReviewWorkflow`, `CreatePRWorkflow`, `SetupStagingReposWorkflow`, `ForkReposWorkflow`, `MirrorReposWorkflow`, `ImplementFeatureWorkflow`, `CodeGenerationWorkflow`, `MonitorPRWorkflow`.
 
 - `fetch_pr` -- retrieves PR metadata and diff from GitHub
 - `run_review` -- renders `github_agent/run_review.md` prompt, returns `ReviewResult`
 - `post_comments`, `post_pr_comment` -- posts inline review comments or general comments
 - `create_pr` -- creates a pull request via the GitHub API
+- `mirror_repository` -- mirrors a GitHub repo into Gitea via `POST /api/v1/repos/migrate` with `mirror=true`; no-op when targeting real GitHub (detected by `is_gitea()` helper)
 - `fork_repository` -- forks a repo into the staging org
 - `create_feature_branch` -- creates a branch on a staging fork
 - `create_staging_pr` -- opens a draft PR with `agent-hold` label

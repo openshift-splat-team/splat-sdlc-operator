@@ -48,13 +48,14 @@ Returns a `StagingPlan` containing `feature_id` and a list of `StagingRepo` entr
 - Human reviewers can edit `repos_to_fork` in the enhancement doc during this gate.
 - **If closed:** transitions to `CloseStoryWontDoWorkflow`, returns an empty `StagingPlan`, and exits.
 
-### Phase D -- Load Approved Enhancement Doc & Fork Repos
+### Phase D -- Mirror, Load Approved Enhancement Doc & Fork Repos
 
-- Loads the approved enhancement doc from `runs/{run_id}/enhancement-doc.json`.
+- **Sub-step 1 (Gitea only):** Runs `MirrorReposWorkflow` on the `github-agent` task queue to mirror each repo in `repos_to_fork` from GitHub into Gitea concurrently via `mirror_repository`. Mirroring calls Gitea's `POST /api/v1/repos/migrate` with `mirror=true`. Repos that fail to mirror are silently dropped -- only successfully mirrored repos proceed. When `github_base_url` points to real GitHub (detected by the `is_gitea()` helper in `github_client.py`), this step is a no-op.
+- **Sub-step 2:** Loads the approved enhancement doc from `runs/{run_id}/enhancement-doc.json`.
 - **Child workflow:** `ForkReposWorkflow`
 - **Task queue:** `github-agent`
 - **Timeout:** 10 min
-- Forks every repo listed in `enhancement_doc.repos_to_fork` into `staging_github_org`. The `repos_to_fork` list in the approved enhancement doc is the authoritative repo list.
+- Forks every repo listed in `enhancement_doc.repos_to_fork` (filtered to successfully mirrored repos when running against Gitea) into `staging_github_org`. The `repos_to_fork` list in the approved enhancement doc is the authoritative repo list.
 
 ### Phase E -- Feature Analysis (Scoped to Approved Repos)
 
