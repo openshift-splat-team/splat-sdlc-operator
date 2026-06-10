@@ -223,9 +223,19 @@ def mirror_repo(source_slug: str, settings: GitHubAgentSettings) -> bool:
     if verify.status_code != 200:
         return False
     repo_data = verify.json()
-    if repo_data.get("empty", True) and resp.status_code == 201:
-        requests.delete(f"{base}/repos/{org}/{repo_name}", headers=headers, timeout=10)
+    if repo_data.get("empty", True):
+        if resp.status_code == 201:
+            requests.delete(f"{base}/repos/{org}/{repo_name}", headers=headers, timeout=10)
         return False
+
+    branches = requests.get(
+        f"{base}/repos/{org}/{repo_name}/branches?limit=1",
+        headers=headers,
+        timeout=10,
+    )
+    if branches.status_code != 200 or not branches.json():
+        return False
+
     return True
 
 
