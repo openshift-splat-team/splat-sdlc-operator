@@ -158,6 +158,44 @@ def fork_repo(source_slug: str, target_org: str, settings: GitHubAgentSettings) 
     return fork_slug
 
 
+def is_gitea(settings: GitHubAgentSettings) -> bool:
+    return "api.github.com" not in settings.github_base_url
+
+
+def mirror_repo(source_slug: str, settings: GitHubAgentSettings) -> None:
+    """Mirror a GitHub repo into Gitea via the migrate API. No-op if not Gitea."""
+    if not is_gitea(settings):
+        return
+
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"}
+    org = source_slug.split("/")[0]
+    repo_name = source_slug.split("/")[-1]
+
+    requests.post(
+        f"{base}/orgs",
+        headers=headers,
+        json={"username": org, "visibility": "public"},
+        timeout=10,
+    )
+
+    resp = requests.post(
+        f"{base}/repos/migrate",
+        headers=headers,
+        json={
+            "clone_addr": f"https://github.com/{source_slug}",
+            "repo_name": repo_name,
+            "repo_owner": org,
+            "mirror": True,
+            "mirror_interval": "8h",
+            "private": False,
+        },
+        timeout=60,
+    )
+    if resp.status_code not in (201, 409):
+        raise RuntimeError(f"Failed to mirror {source_slug}: {resp.status_code} {resp.text[:200]}")
+
+
 def create_branch(
     repo_slug: str,
     branch_name: str,

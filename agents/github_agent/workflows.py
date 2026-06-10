@@ -28,6 +28,7 @@ with workflow.unsafe.imports_passed_through():
         fetch_repo_context,
         fork_repository,
         generate_code_for_bundle,
+        mirror_repository,
         poll_pr_for_label_drop,
         post_comments,
         post_pr_comment,
@@ -169,6 +170,25 @@ class SetupStagingReposWorkflow:
             )
 
         return StagingPlan(feature_id=feature_id, repos=staging_repos)
+
+
+@workflow.defn
+class MirrorReposWorkflow:
+    """Mirrors GitHub repos into Gitea. No-op when using real GitHub."""
+
+    @workflow.run
+    async def run(self, repo_slugs: list[str]) -> None:
+        workflow.logger.info("MirrorReposWorkflow: mirroring %d repos", len(repo_slugs))
+        await asyncio.gather(*[
+            workflow.execute_activity(
+                mirror_repository,
+                args=[slug],
+                start_to_close_timeout=timedelta(seconds=120),
+                retry_policy=_STANDARD_RETRY,
+            )
+            for slug in repo_slugs
+        ])
+        workflow.logger.info("MirrorReposWorkflow: done")
 
 
 @workflow.defn
