@@ -141,8 +141,11 @@ async def fork_repository(source_slug: str, staging_org: str) -> StagingRepo:
 async def create_feature_branch(staging_repo: StagingRepo, feature_branch: str) -> StagingRepo:
     settings = GitHubAgentSettings()
     fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
-    activity.logger.info("Creating branch %s on %s", feature_branch, fork_slug)
-    github_client.create_branch(fork_slug, feature_branch, "main", settings)
+    gh = github_client._connect(settings)
+    repo = gh.get_repo(fork_slug)
+    default_branch = repo.default_branch or "main"
+    activity.logger.info("Creating branch %s on %s from %s", feature_branch, fork_slug, default_branch)
+    github_client.create_branch(fork_slug, feature_branch, default_branch, settings)
     staging_repo.feature_branch = feature_branch
     return staging_repo
 
