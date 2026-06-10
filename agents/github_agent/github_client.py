@@ -81,37 +81,53 @@ def post_review(
 
 
 def create_pr(input: CreatePRInput, settings: GitHubAgentSettings) -> CreatedPR:
-    gh = _connect(settings)
-    repo = gh.get_repo(input.repo)
+    owner, name = input.repo.split("/", 1)
+    api_base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"}
 
     title = input.title
     body = input.body
 
     if input.jira_issue_key:
         title = f"[{input.jira_issue_key}] {title}"
-        jira_link = f"\n\n---\nJira: [{input.jira_issue_key}]"
-        body = body + jira_link
+        body = body + f"\n\n---\nJira: [{input.jira_issue_key}]"
 
-    try:
-        pr: GHPullRequest = repo.create_pull(
-            title=title,
-            body=body,
-            head=input.head_branch,
-            base=input.base_branch,
-            draft=input.draft,
+    resp = requests.post(
+        f"{api_base}/repos/{owner}/{name}/pulls",
+        headers=headers,
+        json={
+            "title": title,
+            "body": body,
+            "head": input.head_branch,
+            "base": input.base_branch,
+        },
+        timeout=30,
+    )
+
+    if resp.status_code == 409 or (resp.status_code == 422 and "already exists" in resp.text.lower()):
+        list_resp = requests.get(
+            f"{api_base}/repos/{owner}/{name}/pulls",
+            headers=headers,
+            params={"state": "open", "head": input.head_branch, "base": input.base_branch},
+            timeout=15,
         )
-    except GithubException as exc:
-        if exc.status != 409:
-            raise
-        existing = list(repo.get_pulls(state="open", head=input.head_branch, base=input.base_branch))
-        if not existing:
-            raise
-        pr = existing[0]
+        if list_resp.status_code == 200 and list_resp.json():
+            pr_data = list_resp.json()[0]
+        else:
+            raise RuntimeError(f"PR conflict but no existing PR found: {resp.status_code} {resp.text[:200]}")
+    elif resp.status_code in (200, 201):
+        pr_data = resp.json()
+    else:
+        raise RuntimeError(f"Failed to create PR on {input.repo}: {resp.status_code} {resp.text[:200]}")
+
+    from urllib.parse import urlparse  # noqa: PLC0415
+    parsed = urlparse(api_base)
+    web_base = f"{parsed.scheme}://{parsed.netloc}"
 
     return CreatedPR(
-        url=pr.html_url,
-        number=pr.number,
-        title=pr.title,
+        url=pr_data.get("html_url") or f"{web_base}/{input.repo}/pulls/{pr_data['number']}",
+        number=pr_data["number"],
+        title=pr_data.get("title", title),
         head_branch=input.head_branch,
         base_branch=input.base_branch,
         draft=input.draft,
