@@ -101,17 +101,20 @@ async def store_created_pr(pr: CreatedPR, run_id: str) -> str:
 # ── Staging / fork / monitoring activities ────────────────────────────────────
 
 @activity.defn
-async def mirror_repository(source_slug: str) -> None:
-    """Mirror a GitHub repo into Gitea. No-op when using real GitHub."""
+async def mirror_repository(source_slug: str) -> bool:
+    """Mirror a GitHub repo into Gitea. Returns True on success, False if mirror failed."""
     settings = GitHubAgentSettings()
     if not github_client.is_gitea(settings):
-        activity.logger.info("Skipping mirror for %s (not using Gitea)", source_slug)
-        return
+        return True
     if "/" not in source_slug:
         source_slug = f"openshift/{source_slug}"
     activity.logger.info("Mirroring %s from GitHub into Gitea", source_slug)
-    github_client.mirror_repo(source_slug, settings)
-    activity.logger.info("Mirror ready: %s", source_slug)
+    ok = github_client.mirror_repo(source_slug, settings)
+    if ok:
+        activity.logger.info("Mirror ready: %s", source_slug)
+    else:
+        activity.logger.warning("Mirror failed for %s; will be dropped from fork list", source_slug)
+    return ok
 
 
 @activity.defn

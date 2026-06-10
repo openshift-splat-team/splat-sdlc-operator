@@ -174,21 +174,30 @@ class SetupStagingReposWorkflow:
 
 @workflow.defn
 class MirrorReposWorkflow:
-    """Mirrors GitHub repos into Gitea. No-op when using real GitHub."""
+    """Mirrors GitHub repos into Gitea. Returns only the repos that succeeded."""
 
     @workflow.run
-    async def run(self, repo_slugs: list[str]) -> None:
+    async def run(self, repo_slugs: list[str]) -> list[str]:
         workflow.logger.info("MirrorReposWorkflow: mirroring %d repos", len(repo_slugs))
-        await asyncio.gather(*[
+        results: list[bool] = list(await asyncio.gather(*[
             workflow.execute_activity(
                 mirror_repository,
                 args=[slug],
                 start_to_close_timeout=timedelta(seconds=120),
-                retry_policy=_STANDARD_RETRY,
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=5),
+                    backoff_coefficient=2.0,
+                    maximum_attempts=2,
+                ),
             )
             for slug in repo_slugs
-        ])
-        workflow.logger.info("MirrorReposWorkflow: done")
+        ]))
+        mirrored = [slug for slug, ok in zip(repo_slugs, results) if ok]
+        dropped = [slug for slug, ok in zip(repo_slugs, results) if not ok]
+        if dropped:
+            workflow.logger.warning("MirrorReposWorkflow: dropped %d repos that failed to mirror: %s", len(dropped), dropped)
+        workflow.logger.info("MirrorReposWorkflow: %d/%d repos mirrored", len(mirrored), len(repo_slugs))
+        return mirrored
 
 
 @workflow.defn

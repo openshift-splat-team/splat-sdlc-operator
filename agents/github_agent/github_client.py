@@ -162,10 +162,14 @@ def is_gitea(settings: GitHubAgentSettings) -> bool:
     return "api.github.com" not in settings.github_base_url
 
 
-def mirror_repo(source_slug: str, settings: GitHubAgentSettings) -> None:
-    """Mirror a GitHub repo into Gitea via the migrate API. No-op if not Gitea."""
+def mirror_repo(source_slug: str, settings: GitHubAgentSettings) -> bool:
+    """Mirror a GitHub repo into Gitea via the migrate API.
+
+    Returns True if the mirror exists (created or already present), False on failure.
+    No-op (returns True) when not using Gitea.
+    """
     if not is_gitea(settings):
-        return
+        return True
 
     base = settings.github_base_url.rstrip("/")
     headers = {"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"}
@@ -192,8 +196,7 @@ def mirror_repo(source_slug: str, settings: GitHubAgentSettings) -> None:
         },
         timeout=60,
     )
-    if resp.status_code not in (201, 409):
-        raise RuntimeError(f"Failed to mirror {source_slug}: {resp.status_code} {resp.text[:200]}")
+    return resp.status_code in (201, 409)
 
 
 def create_branch(

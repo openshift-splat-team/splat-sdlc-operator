@@ -386,22 +386,23 @@ class FullSDLCWorkflow:
         )
         repos_to_fork = enhancement_doc.repos_to_fork
         if repos_to_fork:
-            await workflow.execute_child_workflow(
+            repos_to_fork = await workflow.execute_child_workflow(
                 MirrorReposWorkflow.run,
                 args=[repos_to_fork],
                 id=f"{run_id}-mirror-repos",
                 task_queue="github-agent",
                 execution_timeout=timedelta(minutes=10),
             )
-            await workflow.execute_child_workflow(
-                ForkReposWorkflow.run,
-                args=[repos_to_fork, feature_input.staging_github_org],
-                id=f"{run_id}-fork-repos",
-                task_queue="github-agent",
-                execution_timeout=timedelta(minutes=10),
-            )
+            if repos_to_fork:
+                await workflow.execute_child_workflow(
+                    ForkReposWorkflow.run,
+                    args=[repos_to_fork, feature_input.staging_github_org],
+                    id=f"{run_id}-fork-repos",
+                    task_queue="github-agent",
+                    execution_timeout=timedelta(minutes=10),
+                )
         workflow.logger.info(
-            "Phase D: mirrored and forked %d repos from enhancement doc into %s",
+            "Phase D: mirrored and forked %d repos into %s",
             len(repos_to_fork), feature_input.staging_github_org,
         )
 
