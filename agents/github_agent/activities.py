@@ -158,16 +158,15 @@ async def create_staging_pr(
     body: str,
 ) -> StagingRepo:
     settings = GitHubAgentSettings()
-    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
-    fork_owner = staging_repo.staging_org
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
     gh = github_client._connect(settings)
-    repo = gh.get_repo(source_slug)
+    repo = gh.get_repo(fork_slug)
     default_branch = repo.default_branch or "main"
-    activity.logger.info("Creating staging PR on %s from %s (base=%s)", source_slug, fork_owner, default_branch)
+    activity.logger.info("Creating staging PR on %s (base=%s, head=%s)", fork_slug, default_branch, staging_repo.feature_branch)
 
     pr_input = CreatePRInput(
-        repo=source_slug,
-        head_branch=f"{fork_owner}:{staging_repo.feature_branch}",
+        repo=fork_slug,
+        head_branch=staging_repo.feature_branch,
         base_branch=default_branch,
         title=f"[{story_key}] {title}",
         body=body,
@@ -175,7 +174,7 @@ async def create_staging_pr(
         jira_issue_key=story_key,
     )
     created = github_client.create_pr(pr_input, settings)
-    github_client.add_label(source_slug, created.number, "agent-hold", settings)
+    github_client.add_label(fork_slug, created.number, "agent-hold", settings)
 
     staging_repo.pr_url = created.url
     staging_repo.pr_number = created.number
