@@ -146,30 +146,38 @@ class SetupStagingReposWorkflow:
         ]
         staging_repos: list[StagingRepo] = list(await asyncio.gather(*fork_tasks))
 
-        # Create feature branches concurrently
-        branch_tasks = [
-            workflow.execute_activity(
-                create_feature_branch,
-                args=[sr, feature_branch],
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=_STANDARD_RETRY,
-            )
-            for sr in staging_repos
-        ]
-        staging_repos = list(await asyncio.gather(*branch_tasks))
+        # Create feature branches concurrently — skip repos that fail (e.g. still syncing)
+        ready_repos: list[StagingRepo] = []
+        for sr in staging_repos:
+            try:
+                sr = await workflow.execute_activity(
+                    create_feature_branch,
+                    args=[sr, feature_branch],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_STANDARD_RETRY,
+                )
+                ready_repos.append(sr)
+            except Exception:
+                slug = f"{sr.source_org}/{sr.source_repo}"
+                workflow.logger.warning("Skipping %s — branch creation failed (repo may still be syncing)", slug)
+
+        workflow.logger.info(
+            "SetupStagingReposWorkflow: %d/%d repos ready for PRs",
+            len(ready_repos), len(staging_repos),
+        )
 
         # Create draft PRs with agent-hold (sequential to avoid rate limits)
-        for i, sr in enumerate(staging_repos):
+        for i, sr in enumerate(ready_repos):
             title = f"feat: {feature_id} changes for {sr.source_repo}"
             body = f"This PR implements changes for feature {feature_id}.\n"
-            staging_repos[i] = await workflow.execute_activity(
+            ready_repos[i] = await workflow.execute_activity(
                 create_staging_pr,
                 args=[sr, feature_id, title, body],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=_STANDARD_RETRY,
             )
 
-        return StagingPlan(feature_id=feature_id, repos=staging_repos)
+        return StagingPlan(feature_id=feature_id, repos=ready_repos)
 
 
 @workflow.defn
