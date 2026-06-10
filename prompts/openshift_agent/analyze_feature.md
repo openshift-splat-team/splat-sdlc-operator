@@ -16,9 +16,9 @@ and what CI gates must pass at each step.
 - **Required**: {{ repo.required }}
 {% if repo_dependencies.get(repo.name) %}
 {% set deps = repo_dependencies[repo.name] %}
-{% if deps.depends_on %}- **Depends on**: {{ deps.depends_on | join(', ') }}{% endif %}
-{% if deps.depended_on_by %}- **Depended on by**: {{ deps.depended_on_by | join(', ') }}{% endif %}
-{% if deps.module %}- **Go module**: {{ deps.module }}{% endif %}
+{% if deps.get('depends_on') %}- **Depends on**: {{ deps['depends_on'] | join(', ') }}{% endif %}
+{% if deps.get('depended_on_by') %}- **Depended on by**: {{ deps['depended_on_by'] | join(', ') }}{% endif %}
+{% if deps.get('module') %}- **Go module**: {{ deps['module'] }}{% endif %}
 {% endif %}
 
 {% endfor %}
