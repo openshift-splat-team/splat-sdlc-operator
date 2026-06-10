@@ -140,7 +140,8 @@ def update_story_status(key: str, transition_name: str, settings: JiraAgentSetti
 
 def set_story_points(key: str, points: int, settings: JiraAgentSettings) -> None:
     jira = _connect(settings)
-    jira.update_issue_field(key, {"customfield_10016": points})
+    issue = jira.issue(key)
+    issue.update(fields={"customfield_10016": points})
 
 
 def set_dependency_link(
