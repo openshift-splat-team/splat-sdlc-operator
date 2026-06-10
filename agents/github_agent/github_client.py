@@ -285,24 +285,62 @@ def push_file_change(
 
 
 def add_label(repo_slug: str, pr_number: int, label: str, settings: GitHubAgentSettings) -> None:
-    gh = _connect(settings)
-    pr: GHPullRequest = gh.get_repo(repo_slug).get_pull(pr_number)
-    pr.add_to_labels(label)
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"}
+
+    resp = requests.get(f"{base}/repos/{owner}/{name}/labels", headers=headers, timeout=10)
+    label_id = None
+    if resp.status_code == 200:
+        for lbl in resp.json():
+            if lbl["name"] == label:
+                label_id = lbl["id"]
+                break
+
+    if label_id is None:
+        resp = requests.post(
+            f"{base}/repos/{owner}/{name}/labels",
+            headers=headers,
+            json={"name": label, "color": "#856404"},
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            label_id = resp.json()["id"]
+
+    if label_id is not None:
+        requests.post(
+            f"{base}/repos/{owner}/{name}/issues/{pr_number}/labels",
+            headers=headers,
+            json={"labels": [label_id]},
+            timeout=10,
+        )
 
 
 def remove_label(repo_slug: str, pr_number: int, label: str, settings: GitHubAgentSettings) -> None:
-    gh = _connect(settings)
-    pr: GHPullRequest = gh.get_repo(repo_slug).get_pull(pr_number)
-    try:
-        pr.remove_from_labels(label)
-    except GithubException:
-        pass
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}"}
+
+    resp = requests.get(f"{base}/repos/{owner}/{name}/labels", headers=headers, timeout=10)
+    if resp.status_code == 200:
+        for lbl in resp.json():
+            if lbl["name"] == label:
+                requests.delete(
+                    f"{base}/repos/{owner}/{name}/issues/{pr_number}/labels/{lbl['id']}",
+                    headers=headers,
+                    timeout=10,
+                )
+                break
 
 
 def get_pr_labels(repo_slug: str, pr_number: int, settings: GitHubAgentSettings) -> list[str]:
-    gh = _connect(settings)
-    pr: GHPullRequest = gh.get_repo(repo_slug).get_pull(pr_number)
-    return [label.name for label in pr.labels]
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}"}
+    resp = requests.get(f"{base}/repos/{owner}/{name}/issues/{pr_number}/labels", headers=headers, timeout=10)
+    if resp.status_code == 200:
+        return [lbl["name"] for lbl in resp.json()]
+    return []
 
 
 def get_pr_comments_since(

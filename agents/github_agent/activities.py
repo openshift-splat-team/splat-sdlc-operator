@@ -160,12 +160,15 @@ async def create_staging_pr(
     settings = GitHubAgentSettings()
     source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
     fork_owner = staging_repo.staging_org
-    activity.logger.info("Creating staging PR on %s from %s", source_slug, fork_owner)
+    gh = github_client._connect(settings)
+    repo = gh.get_repo(source_slug)
+    default_branch = repo.default_branch or "main"
+    activity.logger.info("Creating staging PR on %s from %s (base=%s)", source_slug, fork_owner, default_branch)
 
     pr_input = CreatePRInput(
         repo=source_slug,
         head_branch=f"{fork_owner}:{staging_repo.feature_branch}",
-        base_branch="main",
+        base_branch=default_branch,
         title=f"[{story_key}] {title}",
         body=body,
         draft=True,
