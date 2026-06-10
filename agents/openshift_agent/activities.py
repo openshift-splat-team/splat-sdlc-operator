@@ -22,7 +22,7 @@ async def identify_affected_repos(input: OpenShiftFeatureInput) -> RepoIdentific
     if input.repos:
         activity.logger.info("Using %d pre-approved repos from enhancement doc", len(input.repos))
         repos = [
-            AffectedRepo(name=r, tier="tier-1", reason="Listed in approved enhancement document")
+            AffectedRepo(name=r, tier="tier-1", reason="Listed in approved enhancement document", change_type="implementation")
             for r in input.repos
         ]
         return RepoIdentificationResult(
