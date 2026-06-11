@@ -121,7 +121,7 @@ graph TD
 | ollama | ollama/ollama | 11434 | Local LLM inference |
 | gitea | gitea/gitea | 3000 | GitHub-compatible Git server |
 | jira-simulator | custom build | 8080 | Minimal Jira REST API |
-| dep-tree-mcp | custom build | 8811 | Repository dependency analysis via MCP |
+| dep-tree-mcp | custom build | 8000 | Repository dependency analysis via MCP |
 
 All worker containers share a common base image (`docker/dev.Dockerfile`) and
 are configured through environment variables. See

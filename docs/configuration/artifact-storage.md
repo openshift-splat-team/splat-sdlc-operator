@@ -6,14 +6,18 @@ Agents store and retrieve structured data through S3-compatible object storage
 
 ## Storage Abstraction
 
-Two functions handle all artifact I/O:
+Four functions handle artifact I/O:
 
 - **`put_artifact(key, artifact, settings)`** -- serializes a Pydantic model to
   JSON and stores it under the given key. Returns the key.
 - **`get_artifact(key, model, settings)`** -- fetches JSON from S3 and
   deserializes it into the specified Pydantic model.
+- **`put_json(key, data, settings)`** -- stores a plain `dict` as JSON. Use for
+  ad-hoc data that doesn't have a Pydantic model.
+- **`get_json(key, settings)`** -- fetches a plain JSON dict from S3. Returns
+  `None` if the key does not exist.
 
-Both use the MinIO Python client internally. The bucket is auto-created on first
+All use the MinIO Python client internally. The bucket is auto-created on first
 write via `_ensure_bucket()`.
 
 ## Configuration

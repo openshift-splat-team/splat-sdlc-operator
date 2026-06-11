@@ -655,14 +655,18 @@ make cluster-down
 
 ```bash
 make test            # unit tests (no cluster needed)
+make test-integration # integration tests
 make lint            # ruff + mypy
 make fmt             # auto-format
 make dev-logs        # tail all compose service logs
 make dev-reload      # restart all worker containers (picks up code changes)
 make dev-rebuild     # rebuild and restart workers (after pyproject.toml/uv.lock changes)
 make dev-restart W=github-agent  # restart a single worker
+make dev-trigger     # trigger a workflow interactively
 make jira-seed       # import test_data/*.xlsx into the local Jira simulator
 make jira-seed-force # re-import, overwriting existing data
+make gitea-mirror-repo REPO=owner/name  # mirror a GitHub repo into Gitea
+make trigger-enhancement-review  # re-run enhancement review on an existing PR
 ```
 
 Code changes to `agents/` and `prompts/` are picked up immediately by running workers (volume-mounted in compose). Use `make dev-reload` to restart workers if needed. Dependency changes (`pyproject.toml`) require `make dev-rebuild`.
@@ -691,6 +695,7 @@ All config is via environment variables (`.env` for local dev, k8s Secrets for i
 | `LLM_API_BASE` | LLM API base URL — set in `.env` to point at any server; defaults to local Ollama (`http://ollama:11434`) |
 | `GITHUB_TOKEN` | GitHub PAT with `repo` scope — or Gitea API token when using the local simulator |
 | `GITHUB_BASE_URL` | GitHub API base URL; set to `http://localhost:3000/api/v1` to use local Gitea (default: `https://api.github.com`) |
+| `GITHUB_SOURCE_TOKEN` | Optional PAT for upstream GitHub API (rate limits / private repos); falls back to unauthenticated access when unset |
 | `GITHUB_BOT_USER` | Username the bot posts as; its comments are excluded from reviewer feedback (default: `gitea`) |
 | `STAGING_GITHUB_ORG` | GitHub/Gitea org where repository forks are created |
 | `JIRA_URL` / `JIRA_USER` / `JIRA_TOKEN` | Jira credentials (requirements-agent, jira-agent) |
