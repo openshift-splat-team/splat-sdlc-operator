@@ -8,6 +8,7 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from agents.common.models import (
+        CITest,
         CodeGenerationResult,
         CreatePRInput,
         CreatedPR,
@@ -18,6 +19,8 @@ with workflow.unsafe.imports_passed_through():
         ReviewResult,
         StagingPlan,
         StagingRepo,
+        TestResult,
+        ValidationResult,
     )
     from agents.github_agent.activities import (
         apply_file_changes,
@@ -25,9 +28,11 @@ with workflow.unsafe.imports_passed_through():
         create_pr,
         create_staging_pr,
         fetch_pr,
+        fetch_repo_ci_config,
         fetch_repo_context,
         fork_repository,
         generate_code_for_bundle,
+        generate_test_fixes,
         mirror_repository,
         poll_pr_for_label_drop,
         post_comments,
@@ -35,6 +40,7 @@ with workflow.unsafe.imports_passed_through():
         process_pr_comments,
         remove_agent_hold,
         reset_agent_hold_label,
+        run_repo_tests,
         run_review,
         store_created_pr,
         store_implementation_result,
@@ -191,11 +197,11 @@ class MirrorReposWorkflow:
             workflow.execute_activity(
                 mirror_repository,
                 args=[slug],
-                start_to_close_timeout=timedelta(seconds=120),
+                start_to_close_timeout=timedelta(seconds=300),
                 retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=5),
+                    initial_interval=timedelta(seconds=10),
                     backoff_coefficient=2.0,
-                    maximum_attempts=2,
+                    maximum_attempts=3,
                 ),
             )
             for slug in repo_slugs
@@ -347,6 +353,124 @@ def _group_steps_by_repo(plan: "OpenShiftFeaturePlan") -> "list[RepoPRBundle]":
     return bundles
 
 
+# ── ValidateCodeWorkflow ─────────────────────────────────────────────────────
+
+_TEST_RETRY = RetryPolicy(
+    initial_interval=timedelta(seconds=5),
+    backoff_coefficient=2.0,
+    maximum_attempts=2,
+    non_retryable_error_types=["ValueError"],
+)
+
+
+@workflow.defn
+class ValidateCodeWorkflow:
+    """Runs CI checks against the code on the feature branch.
+
+    Fetches the ci-operator config from openshift/release, runs lightweight
+    tests in containers, and auto-fixes failures up to max_attempts times.
+    """
+
+    @workflow.run
+    async def run(
+        self,
+        staging_repo: "StagingRepo",
+        bundle: "RepoPRBundle",
+        feature_description: str,
+        repo_context: dict,
+        max_attempts: int = 3,
+    ) -> "ValidationResult":
+        if isinstance(staging_repo, dict):
+            staging_repo = StagingRepo(**staging_repo)
+        if isinstance(bundle, dict):
+            bundle = RepoPRBundle(**bundle)
+        source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
+        default_branch = repo_context.get("default_branch", "master")
+        workflow.logger.info("ValidateCodeWorkflow: validating %s", source_slug)
+
+        # Fetch CI config from openshift/release
+        ci_tests: list[CITest] = await workflow.execute_activity(
+            fetch_repo_ci_config,
+            args=[staging_repo.source_org, staging_repo.source_repo, default_branch],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=_STANDARD_RETRY,
+        )
+
+        if not ci_tests:
+            workflow.logger.info("No CI tests found for %s; skipping validation", source_slug)
+            return ValidationResult(
+                repo=bundle.repo, all_passed=True, results=[], attempt=0, max_attempts=max_attempts,
+            )
+
+        workflow.logger.info("ValidateCodeWorkflow: %d CI tests to run for %s", len(ci_tests), source_slug)
+
+        for attempt in range(1, max_attempts + 1):
+            # Run tests
+            test_results: list[TestResult] = await workflow.execute_activity(
+                run_repo_tests,
+                args=[staging_repo, ci_tests],
+                start_to_close_timeout=timedelta(minutes=30),
+                retry_policy=_TEST_RETRY,
+            )
+
+            failures = [r for r in test_results if not r.passed]
+            if not failures:
+                workflow.logger.info(
+                    "ValidateCodeWorkflow: all %d tests passed for %s on attempt %d",
+                    len(test_results), source_slug, attempt,
+                )
+                return ValidationResult(
+                    repo=bundle.repo, all_passed=True, results=test_results,
+                    attempt=attempt, max_attempts=max_attempts,
+                )
+
+            workflow.logger.warning(
+                "ValidateCodeWorkflow: %d/%d tests failed for %s (attempt %d/%d)",
+                len(failures), len(test_results), source_slug, attempt, max_attempts,
+            )
+
+            if attempt >= max_attempts:
+                break
+
+            # Auto-fix: ask LLM to fix failures
+            fix_changes = await workflow.execute_activity(
+                generate_test_fixes,
+                args=[staging_repo, failures, bundle, feature_description, repo_context, attempt, max_attempts],
+                start_to_close_timeout=timedelta(minutes=20),
+                retry_policy=_LLM_RETRY,
+            )
+
+            if fix_changes:
+                await workflow.execute_activity(
+                    apply_file_changes,
+                    args=[staging_repo, fix_changes],
+                    start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=_STANDARD_RETRY,
+                )
+            else:
+                workflow.logger.warning("LLM returned no fixes; stopping retry loop")
+                break
+
+        # Final failure — post comment with details
+        failure_summary = "## CI Validation Failed\n\n"
+        failure_summary += f"**{len(failures)} test(s) failed** after {attempt} auto-fix attempt(s):\n\n"
+        for f in failures:
+            failure_summary += f"### {f.test_name} (exit code {f.exit_code})\n"
+            failure_summary += f"```\n{f.stdout[:2000]}\n```\n\n"
+
+        await workflow.execute_activity(
+            post_pr_comment,
+            args=[staging_repo, failure_summary],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=_STANDARD_RETRY,
+        )
+
+        return ValidationResult(
+            repo=bundle.repo, all_passed=False, results=test_results,
+            attempt=attempt, max_attempts=max_attempts,
+        )
+
+
 # ── CodeGenerationWorkflow ────────────────────────────────────────────────────
 
 @workflow.defn
@@ -365,15 +489,15 @@ class CodeGenerationWorkflow:
 
         repo_context = await workflow.execute_activity(
             fetch_repo_context,
-            args=[staging_repo.source_org, staging_repo.source_repo, "main"],
-            start_to_close_timeout=timedelta(seconds=60),
+            args=[staging_repo.source_org, staging_repo.source_repo, "master"],
+            start_to_close_timeout=timedelta(seconds=120),
             retry_policy=_STANDARD_RETRY,
         )
 
         file_changes = await workflow.execute_activity(
             generate_code_for_bundle,
             args=[bundle, feature_description, repo_context],
-            start_to_close_timeout=timedelta(minutes=10),
+            start_to_close_timeout=timedelta(minutes=20),
             retry_policy=_LLM_RETRY,
         )
 
@@ -391,6 +515,15 @@ class CodeGenerationWorkflow:
             commit_messages=[fc.commit_message for fc in file_changes],
         )
 
+        # Validate code before finalizing the PR
+        validation = await workflow.execute_child_workflow(
+            ValidateCodeWorkflow.run,
+            args=[staging_repo, bundle, feature_description, repo_context],
+            id=f"{workflow.info().workflow_id}-validate",
+            task_queue="github-agent",
+            execution_timeout=timedelta(hours=1),
+        )
+
         await workflow.execute_activity(
             update_pr_description,
             args=[staging_repo, result],
@@ -398,16 +531,22 @@ class CodeGenerationWorkflow:
             retry_policy=_STANDARD_RETRY,
         )
 
-        await workflow.execute_activity(
-            remove_agent_hold,
-            staging_repo,
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=_STANDARD_RETRY,
-        )
+        if validation.all_passed:
+            await workflow.execute_activity(
+                remove_agent_hold,
+                staging_repo,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_STANDARD_RETRY,
+            )
+        else:
+            workflow.logger.warning(
+                "CodeGenerationWorkflow: validation failed for %s after %d attempts; leaving agent-hold",
+                source_slug, validation.attempt,
+            )
 
         workflow.logger.info(
-            "CodeGenerationWorkflow: done for %s; %d files changed",
-            source_slug, len(file_changes),
+            "CodeGenerationWorkflow: done for %s; %d files changed, validation=%s",
+            source_slug, len(file_changes), "passed" if validation.all_passed else "failed",
         )
         return result
 

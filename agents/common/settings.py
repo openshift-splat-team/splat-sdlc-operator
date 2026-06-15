@@ -50,7 +50,13 @@ class GitHubAgentSettings(BaseAgentSettings):
 
     github_base_url: str = Field(default="https://api.github.com", description="GitHub API base URL; set to http://localhost:3000/api/v1 for local Gitea")
     github_token: str = Field(..., description="GitHub personal access token")
+    github_source_token: str | None = Field(default=None, description="Optional PAT for upstream GitHub API (rate limits / private repos); uses unauthenticated access if unset")
     staging_github_org: str = Field(default="", description="GitHub org where forks are created")
+
+    container_socket: str = Field(default="/var/run/podman/podman.sock", description="Podman/Docker socket path for ephemeral test containers")
+    go_builder_image: str = Field(default="golang:1.22", description="Container image for Go build/test execution")
+    test_max_attempts: int = Field(default=3, description="Max auto-fix attempts before halting on test failure")
+    test_exclusions: list[str] = Field(default_factory=list, description="CI test names to skip (glob patterns, e.g. 'integration', 'e2e-*')")
 
 
 class EnhancementAgentSettings(BaseAgentSettings):

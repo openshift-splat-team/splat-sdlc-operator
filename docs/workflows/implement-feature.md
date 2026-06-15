@@ -61,16 +61,26 @@ Before execution, all `PRStep` entries from the feature plan are grouped by repo
 
 Each `CodeGenerationWorkflow` child runs on the `github-agent` task queue with a 1-hour timeout:
 
-### 1. `fetch_repo_context`
+### 1. `fetch_repo_context` (rich context)
 
-- **Timeout:** 60 s
-- Fetches the source repo's structure from GitHub (org, repo, main branch).
+- **Timeout:** 120 s
+- Fetches rich context from **upstream GitHub** (not the Gitea mirror) via `fetch_rich_context()` in `github_client.py`:
+  - AGENTS.md / CLAUDE.md from the repo (agent instructions)
+  - All markdown files (README, docs/, subdirectories)
+  - 3-level deep directory tree
+  - Key source files (types.go, doc.go, register.go)
+  - go.mod
+- Context is capped at ~29KB (~7,250 tokens) with priority: agent instructions > markdown > dir tree > go.mod > key files.
+- Uses `pushed_at` timestamp from GitHub API for S3 cache invalidation.
+- Cached in RustFS at `repo-context/{org}/{repo}.json` -- 34x speedup on cache hit.
+- Requires `GITHUB_SOURCE_TOKEN` for authenticated access (rate limits / private repos); falls back to unauthenticated access when unset.
 
 ### 2. `generate_code_for_bundle`
 
-- **Timeout:** 10 min
+- **Timeout:** 20 min
 - **Retry:** LLM (5 attempts, 5 s initial, 2x backoff)
-- Passes the `RepoPRBundle`, feature description, and repo context to the LLM.
+- Passes the `RepoPRBundle`, feature description, and rich repo context to the LLM.
+- The code generation prompt (`prompts/github_agent/generate_code.md`) includes strict scope guardrails: no refactoring, no unrelated changes, no style fixes. The repo context section is labeled "reference only -- not a list of things to change".
 - Returns a list of `FileChange` objects (path, content, commit_message).
 
 ### 3. `apply_file_changes`
@@ -80,12 +90,23 @@ Each `CodeGenerationWorkflow` child runs on the `github-agent` task queue with a
 - Commits each file change to the staging repo's feature branch.
 - Skipped if no file changes were generated.
 
-### 4. `update_pr_description`
+### 4. `ValidateCodeWorkflow` (pre-PR CI validation)
+
+- **Child workflow** running on the `github-agent` task queue.
+- Fetches ci-operator config from `openshift/release` for each repo via `ci_config.py`.
+- Filters to lightweight tests only (unit, lint, verify-* -- no e2e or infrastructure tests). Exclusions configurable via `TEST_EXCLUSIONS`.
+- Runs tests in ephemeral Podman containers via a mounted container socket (`CONTAINER_SOCKET`), using the `GO_BUILDER_IMAGE`.
+- **Auto-fix loop:** on failure, feeds test output to the LLM (prompt: `prompts/github_agent/fix_test_failures.md`), applies fixes, retries up to `TEST_MAX_ATTEMPTS` times (default 3).
+- On final failure, posts failure details as a PR comment and leaves `agent-hold` on.
+- New files: `agents/github_agent/ci_config.py`, `agents/github_agent/test_runner.py`.
+- New models: `CITest`, `TestResult`, `ValidationResult`.
+
+### 5. `update_pr_description`
 
 - **Timeout:** 30 s
 - Updates the staging PR body with the code generation result.
 
-### 5. `remove_agent_hold`
+### 6. `remove_agent_hold`
 
 - **Timeout:** 30 s
 - Removes the `agent-hold` label from the staging PR, signalling that the PR is ready for review.

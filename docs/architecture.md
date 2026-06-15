@@ -47,7 +47,7 @@ Orchestrator (full_sdlc workflow)
     |-- Phase F --> Jira Agent: StoryRefinementWorkflow (human gate)
     |-- Phase G --> Jira Agent: CreateStoriesWorkflow
     |-- Phase H --> GitHub Agent: SetupStagingReposWorkflow
-    |-- Phase I --> GitHub Agent: ImplementFeatureWorkflow
+    |-- Phase I --> GitHub Agent: ImplementFeatureWorkflow (rich context + ValidateCodeWorkflow CI)
     '-- Phase J --> GitHub Agent: MonitorPRWorkflow (human gate)
 ```
 

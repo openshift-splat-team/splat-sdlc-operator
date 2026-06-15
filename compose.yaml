@@ -189,6 +189,15 @@ services:
       - LLM_API_BASE=${LLM_API_BASE:-}
       - GITHUB_BASE_URL=http://gitea:3000/api/v1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
+      - CONTAINER_SOCKET=/var/run/podman/podman.sock
+    volumes:
+      - ./agents:/app/agents:ro,z
+      - ./prompts:/app/prompts:ro,z
+      - ./scripts:/app/scripts:ro,z
+      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-credentials.json}:/secrets/gcp-credentials.json:ro,z
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock:/var/run/podman/podman.sock
+    security_opt:
+      - label:disable
 
   dep-tree:
     image: localhost/openshift-dep-tree:latest
@@ -234,6 +243,33 @@ services:
       - LLM_API_BASE=${LLM_API_BASE:-}
       - GITHUB_BASE_URL=http://gitea:3000/api/v1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
+
+  # ── Dashboard ───────────────────────────────────────────────────────────────
+  dashboard:
+    <<: *worker
+    command: uvicorn dashboard.app:app --host 0.0.0.0 --port 8501 --reload
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./agents:/app/agents:ro,z
+      - ./dashboard:/app/dashboard:ro,z
+      - ./prompts:/app/prompts:ro,z
+      - ./scripts:/app/scripts:ro,z
+      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-credentials.json}:/secrets/gcp-credentials.json:ro,z
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_TASK_QUEUE=orchestrator
+      - S3_ENDPOINT=rustfs:9000
+      - TEMPORAL_UI_EXTERNAL_URL=http://localhost:8233
+      - RUSTFS_EXTERNAL_URL=http://localhost:9001
+      - GITEA_EXTERNAL_URL=http://localhost:3000
+      - JIRA_EXTERNAL_URL=http://localhost:8080
+      - DEP_TREE_EXTERNAL_URL=http://localhost:8000
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/api/health/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   temporal-db-data:

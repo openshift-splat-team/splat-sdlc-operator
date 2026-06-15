@@ -391,7 +391,7 @@ class FullSDLCWorkflow:
                 args=[repos_to_fork],
                 id=f"{run_id}-mirror-repos",
                 task_queue="github-agent",
-                execution_timeout=timedelta(minutes=10),
+                execution_timeout=timedelta(minutes=30),
             )
             if repos_to_fork:
                 await workflow.execute_child_workflow(

@@ -26,11 +26,20 @@ First run takes a few minutes while Ollama downloads the configured model. All
 services start automatically: Temporal, RustFS, Ollama, Gitea, Jira simulator,
 dep-tree MCP server, and all six agent workers.
 
-### 3. Set up Gitea
+### 3. Set up simulators
+
+Run all setup steps in one shot:
+
+```bash
+make setup              # gitea-setup → gitea-seed-repos → gitea-reviewer → jira-seed → gitea-token
+```
+
+Or run them individually:
 
 ```bash
 make gitea-setup        # create admin user, API token, staging org
 make gitea-seed-repos   # create staging repositories
+make jira-seed          # import test data into Jira simulator
 ```
 
 Copy the printed Gitea token into your `.env` as `GITHUB_TOKEN`.

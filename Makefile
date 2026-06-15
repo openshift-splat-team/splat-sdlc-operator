@@ -1,9 +1,9 @@
 .PHONY: dev dev-down dev-build dev-logs dev-reload dev-rebuild dev-restart dev-trigger \
         gitea-token gitea-setup gitea-seed-repos gitea-mirror-repo gitea-reviewer \
-        jira-seed jira-seed-force \
+        jira-seed jira-seed-force setup \
         cluster cluster-down cluster-status build load deploy rollout \
         ollama-logs ollama-model \
-        port-forward dev-orchestrator dev-requirements dev-github trigger \
+        port-forward dev-dashboard dev-orchestrator dev-requirements dev-github trigger \
         trigger-enhancement-review \
         test test-integration lint fmt secrets-template clean
 
@@ -49,6 +49,27 @@ endif
 # Run trigger script inside the compose network
 dev-trigger:
 	$(COMPOSE) run --rm orchestrator python scripts/trigger.py
+
+# ── Full setup (run once after 'make dev') ───────────────────────────────────
+
+setup:  ## Full environment setup: Gitea admin + repos + reviewer, Jira seed, print token
+	@echo "=== Setting up Gitea ==="
+	@$(MAKE) gitea-setup
+	@echo ""
+	@echo "=== Seeding Gitea repos ==="
+	@$(MAKE) gitea-seed-repos
+	@echo ""
+	@echo "=== Creating reviewer user ==="
+	@$(MAKE) gitea-reviewer
+	@echo ""
+	@echo "=== Seeding Jira simulator ==="
+	@$(MAKE) jira-seed
+	@echo ""
+	@echo "=== Gitea API token ==="
+	@$(MAKE) gitea-token
+	@echo ""
+	@echo "=== Setup complete ==="
+	@echo "If this is a fresh environment, copy the token above into .env as GITHUB_TOKEN"
 
 # ── Gitea (local GitHub simulator) ───────────────────────────────────────────
 # Run once after 'make dev':
@@ -215,6 +236,9 @@ port-forward:
 	kubectl port-forward -n $(NAMESPACE) svc/temporal-web 8233:8233 &
 	kubectl port-forward -n $(NAMESPACE) svc/rustfs 9000:9000 9001:9001 &
 	@wait
+
+dev-dashboard:
+	uv run --extra dev uvicorn dashboard.app:app --reload --port 8501
 
 dev-orchestrator:
 	uv run python -m agents.orchestrator.worker

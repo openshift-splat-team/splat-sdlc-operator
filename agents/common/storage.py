@@ -49,3 +49,37 @@ def get_artifact(key: str, model: type, settings: BaseAgentSettings) -> object:
         response.close()
         response.release_conn()
     return model.model_validate(json.loads(raw))
+
+
+def put_json(key: str, data: dict, settings: BaseAgentSettings) -> str:
+    """Store a plain dict as JSON in S3. Returns the key."""
+    client = _client(settings)
+    _ensure_bucket(client, settings.s3_bucket)
+    raw = json.dumps(data).encode()
+    client.put_object(
+        settings.s3_bucket,
+        key,
+        io.BytesIO(raw),
+        length=len(raw),
+        content_type="application/json",
+    )
+    return key
+
+
+def get_json(key: str, settings: BaseAgentSettings) -> dict | None:
+    """Fetch a plain JSON dict from S3. Returns None if the key doesn't exist."""
+    from minio.error import S3Error  # noqa: PLC0415
+
+    client = _client(settings)
+    try:
+        response = client.get_object(settings.s3_bucket, key)
+        try:
+            raw = response.read()
+        finally:
+            response.close()
+            response.release_conn()
+        return json.loads(raw)
+    except S3Error as exc:
+        if exc.code == "NoSuchKey":
+            return None
+        raise

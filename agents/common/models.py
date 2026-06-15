@@ -336,6 +336,31 @@ class PRMonitorEvent(BaseModel):
     labels: list[str] = []
 
 
+# ── CI validation models ────────────────────────────────────────────────────
+
+class CITest(BaseModel):
+    name: str
+    commands: str
+    container_from: str = "src"
+
+
+class TestResult(BaseModel):
+    test_name: str
+    passed: bool
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+    duration_secs: float = 0.0
+
+
+class ValidationResult(BaseModel):
+    repo: str
+    all_passed: bool
+    results: list[TestResult]
+    attempt: int
+    max_attempts: int
+
+
 # ── Full SDLC trigger model ───────────────────────────────────────────────────
 
 class ImplementFeatureInput(BaseModel):

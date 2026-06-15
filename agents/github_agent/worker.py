@@ -17,9 +17,11 @@ from agents.github_agent.activities import (
     create_pr,
     create_staging_pr,
     fetch_pr,
+    fetch_repo_ci_config,
     fetch_repo_context,
     fork_repository,
     generate_code_for_bundle,
+    generate_test_fixes,
     mirror_repository,
     poll_pr_for_label_drop,
     post_comments,
@@ -27,6 +29,7 @@ from agents.github_agent.activities import (
     process_pr_comments,
     remove_agent_hold,
     reset_agent_hold_label,
+    run_repo_tests,
     run_review,
     store_created_pr,
     store_implementation_result,
@@ -42,6 +45,7 @@ from agents.github_agent.workflows import (
     MonitorPRWorkflow,
     ReviewWorkflow,
     SetupStagingReposWorkflow,
+    ValidateCodeWorkflow,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -70,7 +74,7 @@ async def main() -> None:
         workflows=[
             ReviewWorkflow, CreatePRWorkflow, MirrorReposWorkflow, ForkReposWorkflow,
             SetupStagingReposWorkflow, MonitorPRWorkflow,
-            CodeGenerationWorkflow, ImplementFeatureWorkflow,
+            ValidateCodeWorkflow, CodeGenerationWorkflow, ImplementFeatureWorkflow,
         ],
         activities=[
             fetch_pr, run_review, post_comments, store_review, create_pr, store_created_pr,
@@ -79,6 +83,7 @@ async def main() -> None:
             post_pr_comment, reset_agent_hold_label,
             fetch_repo_context, generate_code_for_bundle, update_pr_description,
             remove_agent_hold, store_implementation_result,
+            fetch_repo_ci_config, run_repo_tests, generate_test_fixes,
             save_memory_entry, recall_agent_memories, extract_observations,
         ],
     ):

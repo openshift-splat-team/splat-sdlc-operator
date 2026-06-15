@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import base64
+import logging
 
 import requests
+
+logger = logging.getLogger(__name__)
 from github import Github, GithubException
 from github.PullRequest import PullRequest as GHPullRequest
 
@@ -424,28 +427,271 @@ def get_repo_context(source_slug: str, branch: str, settings: GitHubAgentSetting
     return {"go_mod": go_mod, "readme": readme, "dir_listing": dir_listing}
 
 
+# ── Rich context (upstream GitHub) ──────────────────────────────────────────
+
+_GITHUB_API = "https://api.github.com"
+_GITHUB_RAW = "https://raw.githubusercontent.com"
+_CONTEXT_BUDGET = 29_000  # ~7,250 tokens (leaves headroom for truncation markers)
+
+_AGENT_FILES = {"CLAUDE.md", "AGENTS.md"}
+_KEY_SOURCE_NAMES = {"types.go", "doc.go", "register.go"}
+
+
+def _gh_headers(settings: GitHubAgentSettings) -> dict[str, str]:
+    headers = {"Accept": "application/vnd.github+json"}
+    token = settings.github_source_token
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _fetch_raw(slug: str, branch: str, path: str, settings: GitHubAgentSettings) -> str | None:
+    """Fetch a single file's content from raw.githubusercontent.com."""
+    url = f"{_GITHUB_RAW}/{slug}/{branch}/{path}"
+    headers = {}
+    if settings.github_source_token:
+        headers["Authorization"] = f"token {settings.github_source_token}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            return resp.text
+    except requests.RequestException:
+        pass
+    return None
+
+
+def _build_dir_tree(tree_entries: list[dict], max_depth: int = 3, max_bytes: int = 5000) -> str:
+    """Build a directory tree string from GitHub tree API entries."""
+    lines: list[str] = []
+    size = 0
+    for entry in sorted(tree_entries, key=lambda e: e["path"]):
+        path = entry["path"]
+        depth = path.count("/")
+        if depth >= max_depth:
+            continue
+        name = path.rsplit("/", 1)[-1]
+        indent = "  " * depth
+        prefix = "/" if entry["type"] == "tree" else " "
+        line = f"{indent}{prefix}{name}"
+        size += len(line) + 1
+        if size > max_bytes:
+            lines.append("... [tree truncated]")
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def fetch_rich_context(source_slug: str, settings: GitHubAgentSettings) -> dict:
+    """Fetch rich repo context from upstream GitHub for LLM code generation.
+
+    Caches the result in S3 keyed by repo slug. Uses the upstream repo's
+    ``pushed_at`` timestamp to detect staleness — if the repo hasn't been
+    pushed to since the last cache, the cached context is returned immediately.
+
+    Returns dict with: default_branch, agent_instructions, markdown_docs,
+    dir_tree, go_mod, key_files.
+    """
+    from agents.common import storage  # noqa: PLC0415
+
+    headers = _gh_headers(settings)
+    result: dict = {
+        "default_branch": "master",
+        "agent_instructions": "",
+        "markdown_docs": [],
+        "dir_tree": "",
+        "go_mod": "",
+        "readme": "",
+        "key_files": [],
+        "dir_listing": "",
+    }
+
+    # 1. Get repo metadata (default branch + pushed_at for cache validation)
+    repo_resp = requests.get(
+        f"{_GITHUB_API}/repos/{source_slug}",
+        headers=headers,
+        timeout=15,
+    )
+    if repo_resp.status_code != 200:
+        return result
+    repo_meta = repo_resp.json()
+    default_branch = repo_meta.get("default_branch", "master")
+    pushed_at = repo_meta.get("pushed_at", "")
+    result["default_branch"] = default_branch
+
+    # 2. Check S3 cache
+    cache_key = f"repo-context/{source_slug}.json"
+    try:
+        cached = storage.get_json(cache_key, settings)
+    except Exception:
+        cached = None
+    if cached and cached.get("_pushed_at") == pushed_at and pushed_at:
+        logger.info("Cache hit for %s (pushed_at=%s)", source_slug, pushed_at)
+        cached.pop("_pushed_at", None)
+        return cached
+    logger.info("Cache miss for %s (pushed_at=%s), fetching from GitHub", source_slug, pushed_at)
+
+    # 2. Get full recursive tree (single API call)
+    tree_resp = requests.get(
+        f"{_GITHUB_API}/repos/{source_slug}/git/trees/{default_branch}?recursive=1",
+        headers=headers,
+        timeout=30,
+    )
+    if tree_resp.status_code != 200:
+        return result
+    tree_data = tree_resp.json()
+    tree_entries = tree_data.get("tree", [])
+
+    # 3. Build 3-level directory tree from the tree response
+    result["dir_tree"] = _build_dir_tree(tree_entries, max_depth=3, max_bytes=5000)
+    # Legacy field for backward compat
+    result["dir_listing"] = _build_dir_tree(tree_entries, max_depth=1, max_bytes=2000)
+
+    budget = _CONTEXT_BUDGET - len(result["dir_tree"])
+
+    # 4. Classify files of interest
+    agent_paths: list[str] = []
+    claude_cmd_paths: list[str] = []
+    markdown_paths: list[str] = []
+    key_source_paths: list[str] = []
+
+    for entry in tree_entries:
+        if entry["type"] != "blob":
+            continue
+        path = entry["path"]
+        name = path.rsplit("/", 1)[-1]
+
+        if name in _AGENT_FILES and "/" not in path:
+            agent_paths.append(path)
+        elif path.startswith(".claude/commands/") and name.endswith(".md"):
+            claude_cmd_paths.append(path)
+        elif name.endswith(".md") and name not in _AGENT_FILES:
+            markdown_paths.append(path)
+        elif name in _KEY_SOURCE_NAMES:
+            key_source_paths.append(path)
+        elif name == "go.mod" and "/" not in path:
+            content = _fetch_raw(source_slug, default_branch, path, settings)
+            if content:
+                result["go_mod"] = content[:3000]
+                budget -= len(result["go_mod"])
+
+    # 5. Fetch agent instructions (highest priority)
+    agent_parts: list[str] = []
+    for path in agent_paths:
+        content = _fetch_raw(source_slug, default_branch, path, settings)
+        if content:
+            agent_parts.append(content)
+    for path in claude_cmd_paths:
+        content = _fetch_raw(source_slug, default_branch, path, settings)
+        if content:
+            agent_parts.append(f"### {path}\n{content}")
+
+    if agent_parts:
+        agent_text = "\n\n---\n\n".join(agent_parts)
+        if len(agent_text) > 10_000:
+            agent_text = agent_text[:10_000] + "\n\n[truncated]"
+        result["agent_instructions"] = agent_text
+        budget -= len(agent_text)
+
+    # 6. Fetch markdown docs (prioritize root, then docs/, then others)
+    def _md_sort_key(p: str) -> tuple[int, str]:
+        if "/" not in p:
+            return (0, p)
+        if p.startswith("docs/"):
+            return (1, p)
+        return (2, p)
+
+    markdown_paths.sort(key=_md_sort_key)
+    md_budget = min(max(budget, 0), 10_000)
+    md_used = 0
+    for path in markdown_paths[:15]:
+        content = _fetch_raw(source_slug, default_branch, path, settings)
+        if content:
+            name = path.rsplit("/", 1)[-1]
+            if name.lower() in ("readme.md", "readme") and "/" not in path:
+                result["readme"] = content[:2000]
+            max_file = min(3000, md_budget - md_used)
+            if max_file <= 0:
+                break
+            truncated = content[:max_file]
+            if len(content) > max_file:
+                truncated += "\n\n[truncated]"
+            result["markdown_docs"].append({"path": path, "content": truncated})
+            md_used += len(truncated)
+    budget -= md_used
+
+    # 7. Fetch key source files (remaining budget)
+    src_budget = max(budget, 0)
+    src_used = 0
+    for path in key_source_paths[:20]:
+        if src_used >= src_budget:
+            break
+        content = _fetch_raw(source_slug, default_branch, path, settings)
+        if content:
+            truncated = content[:2000]
+            if len(content) > 2000:
+                truncated += "\n\n[truncated]"
+            result["key_files"].append({"path": path, "content": truncated})
+            src_used += len(truncated)
+
+    # Store in S3 cache with pushed_at for future validation
+    if pushed_at:
+        try:
+            storage.put_json(cache_key, {**result, "_pushed_at": pushed_at}, settings)
+        except Exception:
+            pass  # cache write failure is non-fatal
+
+    return result
+
+
 def get_pr_body(repo_slug: str, pr_number: int, settings: GitHubAgentSettings) -> str:
-    gh = _connect(settings)
-    pr: GHPullRequest = gh.get_repo(repo_slug).get_pull(pr_number)
-    return pr.body or ""
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}"}
+    resp = requests.get(f"{base}/repos/{owner}/{name}/pulls/{pr_number}", headers=headers, timeout=15)
+    if resp.status_code == 200:
+        return resp.json().get("body") or ""
+    return ""
 
 
 def update_pr_body(repo_slug: str, pr_number: int, body: str, settings: GitHubAgentSettings) -> None:
-    gh = _connect(settings)
-    pr: GHPullRequest = gh.get_repo(repo_slug).get_pull(pr_number)
-    pr.edit(body=body)
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"}
+    resp = requests.patch(
+        f"{base}/repos/{owner}/{name}/pulls/{pr_number}",
+        headers=headers,
+        json={"body": body},
+        timeout=15,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to update PR body on {repo_slug}#{pr_number}: {resp.status_code} {resp.text[:200]}")
 
 
 def post_issue_comment(repo_slug: str, pr_number: int, body: str, settings: GitHubAgentSettings) -> None:
-    gh = _connect(settings)
-    gh.get_repo(repo_slug).get_issue(pr_number).create_comment(body)
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"}
+    resp = requests.post(
+        f"{base}/repos/{owner}/{name}/issues/{pr_number}/comments",
+        headers=headers,
+        json={"body": body},
+        timeout=15,
+    )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to post comment on {repo_slug}#{pr_number}: {resp.status_code} {resp.text[:200]}")
 
 
 def get_pr_state(repo_slug: str, pr_number: int, settings: GitHubAgentSettings) -> dict:
-    gh = _connect(settings)
-    pr: GHPullRequest = gh.get_repo(repo_slug).get_pull(pr_number)
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}"}
+    resp = requests.get(f"{base}/repos/{owner}/{name}/pulls/{pr_number}", headers=headers, timeout=15)
+    if resp.status_code != 200:
+        return {"state": "unknown", "merged": False, "labels": []}
+    pr_data = resp.json()
+    labels = [lbl["name"] for lbl in pr_data.get("labels", [])]
     return {
-        "state": pr.state,
-        "merged": pr.merged,
-        "labels": [label.name for label in pr.labels],
+        "state": pr_data.get("state", "unknown"),
+        "merged": pr_data.get("merged", False),
+        "labels": labels,
     }

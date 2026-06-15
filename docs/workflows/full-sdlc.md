@@ -90,12 +90,14 @@ Returns a `StagingPlan` containing `feature_id` and a list of `StagingRepo` entr
 - Creates feature branches and opens draft PRs with `agent-hold` label on the already-forked repos.
 - **Produces:** `StagingPlan`
 
-### Phase I -- Code Generation
+### Phase I -- Code Generation & CI Validation
 
 - **Child workflow:** `ImplementFeatureWorkflow`
 - **Task queue:** `github-agent`
 - **Timeout:** 4 hours
-- Generates and commits code changes across all repos (one PR per repo). See [implement-feature.md](implement-feature.md).
+- Each repo runs `CodeGenerationWorkflow`, which fetches rich context from upstream GitHub (AGENTS.md/CLAUDE.md, markdown docs, directory tree, key source files, go.mod -- capped at ~29KB, cached in RustFS), generates scoped code changes via LLM, then runs `ValidateCodeWorkflow` to validate before finalizing the PR.
+- `ValidateCodeWorkflow` fetches ci-operator config from `openshift/release`, filters to lightweight tests (unit, lint, verify-* -- no e2e/infrastructure), and runs them in ephemeral Podman containers. On failure, test output is fed back to the LLM for auto-fix (up to `TEST_MAX_ATTEMPTS` retries, default 3). If tests still fail after all retries, failure details are posted as a PR comment and `agent-hold` is left on.
+- See [implement-feature.md](implement-feature.md).
 
 ### Phase J -- PR Monitors (fire-and-forget)
 

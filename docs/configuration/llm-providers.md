@@ -29,6 +29,7 @@ Set these in `.env` (or as container environment variables):
 | `LLM_API_BASE` | (none) | Override API base URL (e.g. `http://localhost:11434` for Ollama) |
 | `VERTEX_PROJECT` | (none) | GCP project ID for Vertex AI |
 | `VERTEX_LOCATION` | (none) | Vertex AI region (e.g. `us-central1`) |
+| `GITHUB_SOURCE_TOKEN` | (none) | Optional PAT for upstream GitHub API used by rich repo context fetch; falls back to unauthenticated access when unset |
 
 ## Per-Agent Overrides (llm_config.yaml)
 

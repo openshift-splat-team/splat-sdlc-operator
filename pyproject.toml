@@ -20,6 +20,8 @@ requirements-agent = [
 ]
 github-agent = [
     "PyGithub>=2.3.0",
+    "docker>=7.0.0",
+    "pyyaml>=6.0.0",
 ]
 jira-agent = [
     "jira>=3.8.0",
@@ -37,6 +39,10 @@ review-agent = [
 vertex-ai = [
     "google-cloud-aiplatform>=1.60.0",
 ]
+dashboard = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+]
 dev = [
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",
@@ -49,6 +55,9 @@ dev = [
     "PyGithub>=2.3.0",
     "jira>=3.8.0",
     "mcp>=1.20.0",
+    # Dashboard deps — needed locally for dev-dashboard target.
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
 ]
 
 [build-system]
@@ -56,7 +65,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agents"]
+packages = ["agents", "dashboard"]
 
 [tool.ruff]
 line-length = 100

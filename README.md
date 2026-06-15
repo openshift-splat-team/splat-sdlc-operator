@@ -20,6 +20,7 @@ Trigger (CLI / future: webhook)
         │     ├── SetupStagingReposWorkflow            [github-agent]     create branches & draft PRs
         │     ├── ImplementFeatureWorkflow              [github-agent]     LLM code gen per repo in dependency order
         │     │     └── CodeGenerationWorkflow (×N)     [github-agent]     generate + commit code for one repo
+        │     │           └── ValidateCodeWorkflow      [github-agent]     pre-PR CI validation (unit/lint/verify)
         │     └── MonitorPRWorkflow (×N)               [github-agent]     watch agent-hold label, process comments
         │
         ├── EnhancementReviewWorkflow                 review & revise enhancement doc from PR comments
@@ -69,7 +70,7 @@ flowchart TD
 
     G --> H["**Phase H** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nCreate feature branch\nOpen draft PR → add agent-hold label"]
 
-    H --> I["**Phase I** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nLLM generates code changes\nCommit to feature branches\nRespects dependency order"]
+    H --> I["**Phase I** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nFetch rich repo context from upstream GitHub\nLLM generates scoped code changes\nValidateCodeWorkflow runs CI (unit/lint/verify)\nAuto-fix loop up to 3 retries on failure\nCommit to feature branches\nRespects dependency order"]
 
     I --> J{{"⏸ **Phase J** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
 
@@ -209,7 +210,7 @@ flowchart TD
 
     G --> H["**Phase H** · SetupStagingReposWorkflow\n─────────────────────────\ngithub-agent · runs concurrently per repo\nCreate feature branch\nOpen draft PR → add agent-hold label"]
 
-    H --> I["**Phase I** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nLLM generates code changes\nCommit to feature branches\nRespects dependency order"]
+    H --> I["**Phase I** · ImplementFeatureWorkflow\n─────────────────────────\ngithub-agent · one CodeGenerationWorkflow per repo\nFetch rich repo context from upstream GitHub\nLLM generates scoped code changes\nValidateCodeWorkflow runs CI (unit/lint/verify)\nAuto-fix loop up to 3 retries on failure\nCommit to feature branches\nRespects dependency order"]
 
     I --> J{{"⏸ **Phase J** · MonitorPRWorkflow ×N\n─────────────────────────\ngithub-agent · one per repo · up to 90 days\nPoll PR every 5 min"}}
 
@@ -260,12 +261,15 @@ flowchart LR
 
     A --> B["ImplementFeatureWorkflow\n───────────────\ngithub-agent\nGroup PR steps by repo\nProcess in dependency order"]
 
-    B --> C["CodeGenerationWorkflow ×N\n───────────────\ngithub-agent · LLM\nFetch repo context\nGenerate file changes\nCommit to feature branch\nRemove agent-hold label"]
+    B --> C["CodeGenerationWorkflow ×N\n───────────────\ngithub-agent · LLM\nFetch rich repo context\nGenerate scoped file changes\nCommit to feature branch"]
 
-    C --> OUT([FeatureImplementationResult\nin S3])
+    C --> V["ValidateCodeWorkflow\n───────────────\ngithub-agent\nFetch ci-operator config\nRun unit/lint/verify tests\nAuto-fix loop (up to 3 retries)\nRemove agent-hold label"]
+
+    V --> OUT([FeatureImplementationResult\nin S3])
 
     style B fill:#e8f4f8,stroke:#0969da,color:#000
     style C fill:#e8f4f8,stroke:#0969da,color:#000
+    style V fill:#e8f4f8,stroke:#0969da,color:#000
 ```
 
 ---
@@ -444,7 +448,13 @@ Gitea provides a GitHub-compatible REST API and web UI. Point the agents at it i
 
 ### One-time setup
 
-After `make dev`, run:
+After `make dev`, run all setup steps in one shot:
+
+```bash
+make setup              # runs gitea-setup → gitea-seed-repos → gitea-reviewer → jira-seed → gitea-token
+```
+
+Or run them individually:
 
 ```bash
 make gitea-setup        # create admin user, API token, and staging org
@@ -654,6 +664,7 @@ make cluster-down
 ## Development workflow
 
 ```bash
+make setup           # one-shot environment init: gitea-setup → gitea-seed-repos → gitea-reviewer → jira-seed → gitea-token
 make test            # unit tests (no cluster needed)
 make test-integration # integration tests
 make lint            # ruff + mypy
@@ -707,6 +718,10 @@ All config is via environment variables (`.env` for local dev, k8s Secrets for i
 | `MCP_SERVER_URL` | SSE URL for the openshift-dep-tree MCP server (e.g. `http://dep-tree:8000/sse`); preferred over stdio — see [OpenShift dep-tree MCP server](#openshift-dep-tree-mcp-server) |
 | `MCP_SERVER_SCRIPT` | Absolute path to `openshift-dep-tree` `mcp_server.py` — stdio fallback when `MCP_SERVER_URL` is not set |
 | `MCP_DATA_DIR` | Override the data directory for the MCP server; defaults to the script's own directory |
+| `CONTAINER_SOCKET` | Path to the Podman/Docker socket for CI test containers (default: `/run/podman/podman.sock`) |
+| `GO_BUILDER_IMAGE` | Container image used for running Go tests during pre-PR validation (default: `golang:1.22`) |
+| `TEST_MAX_ATTEMPTS` | Maximum auto-fix attempts when CI tests fail (default: `3`) |
+| `TEST_EXCLUSIONS` | Comma-separated list of CI test name patterns to skip (e.g. `e2e,integration`) |
 | `GOOGLE_APPLICATION_CREDENTIALS_FILE` | Path to GCP service account JSON; mounted into containers for Vertex AI authentication |
 | `S3_ENDPOINT` | S3-compatible API address (RustFS in local dev) |
 

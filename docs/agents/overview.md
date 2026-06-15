@@ -44,7 +44,9 @@ Fetches Jira epics and produces structured requirement specifications via LLM. A
 
 **Task queue:** `github-agent` | **Settings:** `GitHubAgentSettings` | **Module:** `agents.github_agent.worker`
 
-Handles all GitHub/Gitea interactions: PR reviews, staging repo setup, code generation, and PR monitoring. Hosts multiple workflows: `ReviewWorkflow`, `CreatePRWorkflow`, `SetupStagingReposWorkflow`, `ForkReposWorkflow`, `MirrorReposWorkflow`, `ImplementFeatureWorkflow`, `CodeGenerationWorkflow`, `MonitorPRWorkflow`.
+Handles all GitHub/Gitea interactions: PR reviews, staging repo setup, code generation, CI validation, and PR monitoring. Hosts multiple workflows: `ReviewWorkflow`, `CreatePRWorkflow`, `SetupStagingReposWorkflow`, `ForkReposWorkflow`, `MirrorReposWorkflow`, `ImplementFeatureWorkflow`, `CodeGenerationWorkflow`, `ValidateCodeWorkflow`, `MonitorPRWorkflow`.
+
+All PR operations (`update_pr_description`, `post_pr_comment`, `poll_pr_for_label_drop`, `remove_agent_hold`, `reset_agent_hold_label`, `get_pr_body`, `get_pr_state`) use raw REST API calls for Gitea compatibility (no PyGithub dependency). PR operations target `fork_slug` (staging_org/staging_repo), not the source mirror.
 
 - `fetch_pr` -- retrieves PR metadata and diff from GitHub
 - `run_review` -- renders `github_agent/run_review.md` prompt, returns `ReviewResult`
@@ -54,10 +56,12 @@ Handles all GitHub/Gitea interactions: PR reviews, staging repo setup, code gene
 - `fork_repository` -- forks a repo into the staging org
 - `create_feature_branch` -- creates a branch on a staging fork
 - `create_staging_pr` -- opens a draft PR with `agent-hold` label
-- `generate_code_for_bundle` -- renders `github_agent/generate_code.md` prompt, returns `FileChange` list
+- `generate_code_for_bundle` -- renders `github_agent/generate_code.md` prompt with strict scope guardrails, returns `FileChange` list
 - `apply_file_changes` -- commits generated file changes to a branch
 - `process_pr_comments` -- renders `github_agent/process_comments.md` prompt, returns response + file changes
-- `fetch_repo_context` -- retrieves repo structure, go.mod, and README for code generation context
+- `fetch_repo_context` -- fetches rich context from upstream GitHub (AGENTS.md/CLAUDE.md, markdown docs, directory tree, key source files, go.mod); cached in RustFS with `pushed_at`-based invalidation
+- `fetch_ci_config` -- retrieves ci-operator config from `openshift/release` for a repo
+- `run_ci_tests` -- executes lightweight CI tests (unit/lint/verify) in ephemeral Podman containers
 - `poll_pr_for_label_drop` -- polls a PR for `agent-hold` label removal or new comments
 - `update_pr_description`, `remove_agent_hold`, `reset_agent_hold_label` -- PR management helpers
 - `store_implementation_result` -- persists implementation results to S3

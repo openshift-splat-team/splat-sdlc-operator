@@ -6,6 +6,7 @@ from temporalio import activity
 
 from agents.common import llm, prompts, storage
 from agents.common.models import (
+    CITest,
     CodeGenerationResult,
     CommentProcessingResult,
     CreatePRInput,
@@ -18,9 +19,10 @@ from agents.common.models import (
     RepoPRBundle,
     ReviewResult,
     StagingRepo,
+    TestResult,
 )
 from agents.common.settings import GitHubAgentSettings
-from agents.github_agent import github_client
+from agents.github_agent import ci_config, github_client, test_runner
 
 
 # ── Review activities ─────────────────────────────────────────────────────────
@@ -185,13 +187,13 @@ async def create_staging_pr(
 @activity.defn
 async def poll_pr_for_label_drop(staging_repo: StagingRepo) -> PRMonitorEvent:
     settings = GitHubAgentSettings()
-    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
-    state = github_client.get_pr_state(source_slug, staging_repo.pr_number, settings)
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    state = github_client.get_pr_state(fork_slug, staging_repo.pr_number, settings)
     labels = state.get("labels", [])
 
     if state.get("state") == "closed":
         return PRMonitorEvent(
-            repo_slug=source_slug,
+            repo_slug=fork_slug,
             pr_number=staging_repo.pr_number,
             pr_url=staging_repo.pr_url,
             event_type="closed",
@@ -200,10 +202,10 @@ async def poll_pr_for_label_drop(staging_repo: StagingRepo) -> PRMonitorEvent:
 
     if "agent-hold" not in labels:
         comments = github_client.get_pr_comments_since(
-            source_slug, staging_repo.pr_number, 0, settings
+            fork_slug, staging_repo.pr_number, 0, settings
         )
         return PRMonitorEvent(
-            repo_slug=source_slug,
+            repo_slug=fork_slug,
             pr_number=staging_repo.pr_number,
             pr_url=staging_repo.pr_url,
             event_type="label_dropped",
@@ -212,7 +214,7 @@ async def poll_pr_for_label_drop(staging_repo: StagingRepo) -> PRMonitorEvent:
         )
 
     return PRMonitorEvent(
-        repo_slug=source_slug,
+        repo_slug=fork_slug,
         pr_number=staging_repo.pr_number,
         pr_url=staging_repo.pr_url,
         event_type="comment",
@@ -271,17 +273,17 @@ async def apply_file_changes(staging_repo: StagingRepo, file_changes: list[FileC
 @activity.defn
 async def post_pr_comment(staging_repo: StagingRepo, body: str) -> None:
     settings = GitHubAgentSettings()
-    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
-    activity.logger.info("Posting comment on %s#%d", source_slug, staging_repo.pr_number)
-    github_client.post_issue_comment(source_slug, staging_repo.pr_number, body, settings)
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    activity.logger.info("Posting comment on %s#%d", fork_slug, staging_repo.pr_number)
+    github_client.post_issue_comment(fork_slug, staging_repo.pr_number, body, settings)
 
 
 @activity.defn
 async def reset_agent_hold_label(staging_repo: StagingRepo) -> None:
     settings = GitHubAgentSettings()
-    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
-    activity.logger.info("Resetting agent-hold label on %s#%d", source_slug, staging_repo.pr_number)
-    github_client.add_label(source_slug, staging_repo.pr_number, "agent-hold", settings)
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    activity.logger.info("Resetting agent-hold label on %s#%d", fork_slug, staging_repo.pr_number)
+    github_client.add_label(fork_slug, staging_repo.pr_number, "agent-hold", settings)
 
 
 # ── Code generation activities ────────────────────────────────────────────────
@@ -290,8 +292,16 @@ async def reset_agent_hold_label(staging_repo: StagingRepo) -> None:
 async def fetch_repo_context(source_org: str, source_repo: str, branch: str) -> dict:
     settings = GitHubAgentSettings()
     source_slug = f"{source_org}/{source_repo}"
-    activity.logger.info("Fetching repo context for %s@%s", source_slug, branch)
-    return github_client.get_repo_context(source_slug, branch, settings)
+    activity.logger.info("Fetching rich repo context for %s from upstream GitHub", source_slug)
+    ctx = github_client.fetch_rich_context(source_slug, settings)
+    activity.logger.info(
+        "Rich context for %s: default_branch=%s, agent_instructions=%d bytes, "
+        "markdown_docs=%d files, dir_tree=%d bytes, key_files=%d files",
+        source_slug, ctx["default_branch"], len(ctx.get("agent_instructions", "")),
+        len(ctx.get("markdown_docs", [])), len(ctx.get("dir_tree", "")),
+        len(ctx.get("key_files", [])),
+    )
+    return ctx
 
 
 @activity.defn
@@ -324,8 +334,8 @@ async def generate_code_for_bundle(
 @activity.defn
 async def update_pr_description(staging_repo: StagingRepo, result: CodeGenerationResult) -> None:
     settings = GitHubAgentSettings()
-    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
-    activity.logger.info("Updating PR description on %s#%d", source_slug, staging_repo.pr_number)
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    activity.logger.info("Updating PR description on %s#%d", fork_slug, staging_repo.pr_number)
 
     summary = "\n\n## Implementation Summary\n\n"
     summary += f"**Files changed ({len(result.files_changed)}):**\n"
@@ -336,16 +346,16 @@ async def update_pr_description(staging_repo: StagingRepo, result: CodeGeneratio
         for msg in result.commit_messages:
             summary += f"- {msg}\n"
 
-    current_body = github_client.get_pr_body(source_slug, staging_repo.pr_number, settings)
-    github_client.update_pr_body(source_slug, staging_repo.pr_number, current_body + summary, settings)
+    current_body = github_client.get_pr_body(fork_slug, staging_repo.pr_number, settings)
+    github_client.update_pr_body(fork_slug, staging_repo.pr_number, current_body + summary, settings)
 
 
 @activity.defn
 async def remove_agent_hold(staging_repo: StagingRepo) -> None:
     settings = GitHubAgentSettings()
-    source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
-    activity.logger.info("Removing agent-hold from %s#%d", source_slug, staging_repo.pr_number)
-    github_client.remove_label(source_slug, staging_repo.pr_number, "agent-hold", settings)
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    activity.logger.info("Removing agent-hold from %s#%d", fork_slug, staging_repo.pr_number)
+    github_client.remove_label(fork_slug, staging_repo.pr_number, "agent-hold", settings)
 
 
 @activity.defn
@@ -354,3 +364,61 @@ async def store_implementation_result(result: FeatureImplementationResult, run_i
     key = f"runs/{run_id}/impl-result.json"
     activity.logger.info("Storing implementation result to S3 key %s", key)
     return storage.put_artifact(key, result, settings)
+
+
+# ── CI validation activities ────────────────────────────────────────────────
+
+@activity.defn
+async def fetch_repo_ci_config(source_org: str, source_repo: str, branch: str) -> list[CITest]:
+    settings = GitHubAgentSettings()
+    activity.logger.info("Fetching CI config for %s/%s@%s", source_org, source_repo, branch)
+    return ci_config.fetch_ci_config(source_repo, branch, settings)
+
+
+@activity.defn
+async def run_repo_tests(staging_repo: StagingRepo, tests: list[CITest]) -> list[TestResult]:
+    settings = GitHubAgentSettings()
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+
+    from urllib.parse import urlparse  # noqa: PLC0415
+    parsed = urlparse(settings.github_base_url)
+    clone_url = f"{parsed.scheme}://{parsed.netloc}/{fork_slug}.git"
+
+    activity.logger.info(
+        "Running %d CI tests for %s on branch %s",
+        len(tests), fork_slug, staging_repo.feature_branch,
+    )
+    return test_runner.run_tests(clone_url, staging_repo.feature_branch, tests, settings)
+
+
+@activity.defn
+async def generate_test_fixes(
+    staging_repo: StagingRepo,
+    failures: list[TestResult],
+    bundle: RepoPRBundle,
+    feature_description: str,
+    repo_context: dict,
+    attempt: int,
+    max_attempts: int,
+) -> list[FileChange]:
+    settings = GitHubAgentSettings()
+    activity.logger.info(
+        "Generating fixes for %d test failures in %s (attempt %d/%d)",
+        len(failures), bundle.repo, attempt, max_attempts,
+    )
+    messages = prompts.render(
+        "github_agent/fix_test_failures.md",
+        repo=bundle.repo,
+        steps=bundle.steps,
+        feature_description=feature_description,
+        failures=[f.model_dump() for f in failures],
+        repo_context=repo_context,
+        attempt=attempt,
+        max_attempts=max_attempts,
+    )
+
+    class _FixResponse(BaseModel):
+        file_changes: list[FileChange]
+
+    result = await llm.complete_structured(messages, settings, _FixResponse)
+    return result.file_changes
