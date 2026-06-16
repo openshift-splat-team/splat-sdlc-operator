@@ -11,7 +11,7 @@ from temporalio.worker import Worker
 from agents.common import llm_config
 from agents.common.memory_activities import extract_observations, recall_agent_memories, save_memory_entry
 from agents.common.settings import OrchestratorSettings
-from agents.orchestrator.activities import load_enhancement_doc, load_feature_plan, load_staging_plan
+from agents.orchestrator.activities import load_enhancement_doc, load_feature_plan, load_staging_plan, update_run_status
 from agents.orchestrator.workflows import FullSDLCWorkflow, SDLCOrchestratorWorkflow
 
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +40,7 @@ async def main() -> None:
         workflows=[SDLCOrchestratorWorkflow, FullSDLCWorkflow],
         activities=[
             load_feature_plan, load_enhancement_doc, load_staging_plan,
+            update_run_status,
             save_memory_entry, recall_agent_memories, extract_observations,
         ],
     ):

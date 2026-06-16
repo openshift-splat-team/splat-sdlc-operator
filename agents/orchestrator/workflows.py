@@ -276,6 +276,22 @@ def _feature_branch_name(run_id: str) -> str:
     return f"feat/{slug}"
 
 
+_STATUS_RETRY = RetryPolicy(initial_interval=timedelta(seconds=1), maximum_attempts=2)
+
+
+async def _set_status(run_id: str, phase: str, phase_label: str, message: str) -> None:
+    from agents.orchestrator.activities import update_run_status  # noqa: PLC0415
+    try:
+        await workflow.execute_activity(
+            update_run_status,
+            args=[run_id, phase, phase_label, message],
+            start_to_close_timeout=timedelta(seconds=10),
+            retry_policy=_STATUS_RETRY,
+        )
+    except Exception:
+        workflow.logger.warning("Status update failed (non-fatal): %s %s", phase, message)
+
+
 @workflow.defn
 class FullSDLCWorkflow:
     """End-to-end OpenShift feature SDLC workflow with human approval gates."""
@@ -286,6 +302,7 @@ class FullSDLCWorkflow:
         feature_branch = _feature_branch_name(run_id)
 
         # Phase A — Ensure Jira epic exists
+        await _set_status(run_id, "A", "Ensure Epic", "Creating Jira epic")
         epic: JiraEpic = await workflow.execute_child_workflow(
             EnsureEpicWorkflow.run,
             feature_input,
@@ -294,8 +311,10 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(minutes=10),
         )
         workflow.logger.info("Epic: %s", epic.key)
+        await _set_status(run_id, "A", "Ensure Epic", f"Epic {epic.key} ready")
 
         # Phase B — Generate enhancement doc and open PR (before feature plan)
+        await _set_status(run_id, "B", "Enhancement", "Generating enhancement document")
         pr_input = EnhancementPRInput(
             repo=feature_input.enhancement_repo,
             base_branch="main",
@@ -333,7 +352,10 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(seconds=60),
         )
 
+        await _set_status(run_id, "B", "Enhancement", f"Enhancement PR opened: {enhancement_pr.url}")
+
         # Phase C — Wait for enhancement PR approval (or closure)
+        await _set_status(run_id, "C", "Approval Gate", "Waiting for enhancement PR approval")
         url_parts = enhancement_pr.url.rstrip("/").split("/")
         enhancement_repo_slug = f"{url_parts[-4]}/{url_parts[-3]}"
         enhancement_pr_number = int(url_parts[-1])
@@ -388,6 +410,7 @@ class FullSDLCWorkflow:
         workflow.logger.info("Enhancement PR approved; loading approved repos")
 
         # Phase D — Load approved enhancement doc, fork its repos
+        await _set_status(run_id, "D", "Mirror & Fork", "Loading approved enhancement document")
         enhancement_doc = await workflow.execute_activity(
             load_enhancement_doc,
             f"runs/{run_id}/enhancement-doc.json",
@@ -400,6 +423,7 @@ class FullSDLCWorkflow:
         )
         repos_to_fork = enhancement_doc.repos_to_fork
         if repos_to_fork:
+            await _set_status(run_id, "D", "Mirror & Fork", f"Mirroring {len(repos_to_fork)} repos from GitHub")
             repos_to_fork = await workflow.execute_child_workflow(
                 MirrorReposWorkflow.run,
                 args=[repos_to_fork],
@@ -408,6 +432,7 @@ class FullSDLCWorkflow:
                 execution_timeout=timedelta(minutes=30),
             )
             if repos_to_fork:
+                await _set_status(run_id, "D", "Mirror & Fork", f"Forking {len(repos_to_fork)} repos into {feature_input.staging_github_org}")
                 await workflow.execute_child_workflow(
                     ForkReposWorkflow.run,
                     args=[repos_to_fork, feature_input.staging_github_org],
@@ -421,6 +446,7 @@ class FullSDLCWorkflow:
         )
 
         # Phase E — Analyze feature scoped to the approved repos
+        await _set_status(run_id, "E", "Feature Analysis", f"Analyzing feature across {len(repos_to_fork)} repos")
         openshift_input = OpenShiftFeatureInput(
             feature_description=feature_input.feature_description,
             target_ocp_version=feature_input.target_ocp_version,
@@ -458,6 +484,7 @@ class FullSDLCWorkflow:
         )
 
         # Phase F — Story proposal and human refinement loop
+        await _set_status(run_id, "F", "Story Refinement", "Proposing stories for human review")
         from agents.requirements_agent.activities import propose_stories  # noqa: PLC0415
         from agents.common.models import RequirementSpec, Story  # noqa: PLC0415
 
@@ -490,6 +517,7 @@ class FullSDLCWorkflow:
         )
 
         # Phase G — Create, size, prioritize, link stories
+        await _set_status(run_id, "G", "Create Stories", f"Creating stories in Jira for {epic.key}")
         await workflow.execute_child_workflow(
             CreateStoriesWorkflow.run,
             args=[epic.key, final_story_plan],
@@ -499,6 +527,7 @@ class FullSDLCWorkflow:
         )
 
         # Phase H — Create feature branches and staging PRs for forked repos
+        await _set_status(run_id, "H", "Setup Staging", f"Setting up branches and PRs for {len(repos_to_fork)} repos")
         staging_plan: StagingPlan = await workflow.execute_child_workflow(
             SetupStagingReposWorkflow.run,
             args=[repos_to_fork, feature_input.staging_github_org, run_id, feature_branch],
@@ -522,6 +551,7 @@ class FullSDLCWorkflow:
         )
 
         # Phase I — Generate and commit code changes (one PR per repo)
+        await _set_status(run_id, "I", "Implement", f"Generating code for {len(staging_plan.repos)} repos")
         await workflow.execute_child_workflow(
             ImplementFeatureWorkflow.run,
             args=[staging_plan, feature_plan, feature_input.feature_description, run_id],
@@ -530,8 +560,10 @@ class FullSDLCWorkflow:
             execution_timeout=timedelta(hours=4),
         )
         workflow.logger.info("Phase I: code generation complete for %d repos", len(staging_plan.repos))
+        await _set_status(run_id, "I", "Implement", f"Code generation complete for {len(staging_plan.repos)} repos")
 
         # Phase J — Start long-lived PR monitors (fire-and-forget, watches for human comments)
+        await _set_status(run_id, "J", "Monitor PRs", f"Monitoring {len(staging_plan.repos)} PRs for review feedback")
         for staging_repo in staging_plan.repos:
             repo_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
             await workflow.start_child_workflow(

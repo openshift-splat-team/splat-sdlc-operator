@@ -1,6 +1,8 @@
 """Orchestrator activities for loading cross-agent artifacts."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from temporalio import activity
 
 from agents.common import storage
@@ -27,3 +29,16 @@ async def load_enhancement_doc(artifact_ref: str) -> EnhancementDoc:
     settings = OrchestratorSettings()
     activity.logger.info("Loading enhancement doc from %s", artifact_ref)
     return storage.get_artifact(artifact_ref, EnhancementDoc, settings)
+
+
+@activity.defn
+async def update_run_status(run_id: str, phase: str, phase_label: str, message: str) -> None:
+    settings = OrchestratorSettings()
+    status = {
+        "phase": phase,
+        "phase_label": phase_label,
+        "message": message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    storage.put_json(f"runs/{run_id}/status.json", status, settings)
+    activity.logger.info("Status [%s] %s: %s", phase, phase_label, message)
