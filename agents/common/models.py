@@ -139,6 +139,10 @@ class PRStep(BaseModel):
     branch: str = "main"
     risk: Literal["low", "medium", "high"] = "low"
     ci_requirements: list[str] = []
+    target_directories: list[str] = []
+    files_to_create: list[str] = []
+    files_to_modify: list[str] = []
+    files_to_avoid: list[str] = []
 
 
 class CIJob(BaseModel):

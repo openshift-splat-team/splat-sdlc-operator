@@ -487,6 +487,16 @@ class CodeGenerationWorkflow:
         source_slug = f"{staging_repo.source_org}/{staging_repo.source_repo}"
         workflow.logger.info("CodeGenerationWorkflow: generating code for %s", source_slug)
 
+        scoped_steps = [s for s in bundle.steps if s.target_directories or s.files_to_create]
+        if scoped_steps:
+            for s in scoped_steps:
+                workflow.logger.info(
+                    "Step %d scope: dirs=%s, create=%s, modify=%s, avoid=%s",
+                    s.step, s.target_directories, s.files_to_create, s.files_to_modify, s.files_to_avoid,
+                )
+        else:
+            workflow.logger.warning("CodeGenerationWorkflow: no file-level scope targets for %s — using prose-only constraints", source_slug)
+
         repo_context = await workflow.execute_activity(
             fetch_repo_context,
             args=[staging_repo.source_org, staging_repo.source_repo, "master"],

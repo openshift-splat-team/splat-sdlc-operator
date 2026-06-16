@@ -30,6 +30,7 @@ Rules you must follow:
 - Always identify which openshift/release CI jobs need to be added or updated.
 - Be specific about branch targets (main vs release-4.x).
 - Only include repos from the affected repositories list above in the pr_sequence.
+- Do NOT propose refactoring existing code. Steps must only add or extend — never restructure, rename, or reorganize code that already works.
 
 Respond ONLY with a valid JSON object. Do not include markdown fences or any
 other text outside the JSON.
@@ -47,13 +48,25 @@ Output schema:
       "blocked_by_step": integer | null,
       "branch": "string — e.g. main or release-4.16",
       "risk": "low" | "medium" | "high",
-      "ci_requirements": ["string", ...]
+      "ci_requirements": ["string", ...],
+      "target_directories": ["string — directories this step should modify, e.g. config/v1, pkg/operator"],
+      "files_to_create": ["string — specific new files to create, e.g. config/v1/types_gardener.go"],
+      "files_to_modify": ["string — specific existing files to modify, e.g. config/v1/register.go"],
+      "files_to_avoid": ["string — patterns of files that must NOT be edited, e.g. zz_generated.*, vendor/*"]
     }
   ],
   "estimated_timeline": "string — rough estimate",
   "risks": ["string", ...],
   "notes": ["string", ...]
 }
+
+For each step, be specific about file targets:
+- target_directories: which directories this step should modify. Use paths visible in the repo structure.
+- files_to_create: specific new files that need to be created. Include the full relative path.
+- files_to_modify: specific existing files that need changes. Only list files that actually exist in the repo.
+- files_to_avoid: patterns of files that must NOT be edited (generated files, vendored code, etc.).
+  Always include "zz_generated.*" and "vendor/*" in files_to_avoid.
+Do not guess paths — only specify paths consistent with the repository's directory structure and conventions.
 
 <!-- role: user -->
 ## Feature Request

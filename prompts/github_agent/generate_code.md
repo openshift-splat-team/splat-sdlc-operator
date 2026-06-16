@@ -7,7 +7,8 @@ Generate the minimal set of file changes needed to implement the steps listed be
 You MUST only make changes that directly implement the steps listed in "Work Required" below. Every file change you return must trace back to a specific step. If a change does not implement part of a listed step, do not include it.
 
 Do NOT:
-- Fix, refactor, or improve existing code unrelated to the listed steps
+- Refactor, restructure, rename, or reorganize any existing code — even if it would be "better"
+- Fix or improve existing code unrelated to the listed steps
 - Add tests, docs, or tooling beyond what the steps explicitly require
 - Modify files that are not necessary for the feature
 - Apply style changes, linting fixes, or naming improvements to existing code
@@ -29,7 +30,23 @@ Do NOT:
 ### Step {{ step.step }}: {{ step.description }}
 - Risk: {{ step.risk }}
 - CI requirements: {{ step.ci_requirements | join(", ") or "none" }}
+{% if step.target_directories is defined and step.target_directories %}- Target directories: {{ step.target_directories | join(", ") }}
+{% endif %}{% if step.files_to_create is defined and step.files_to_create %}- Files to create: {{ step.files_to_create | join(", ") }}
+{% endif %}{% if step.files_to_modify is defined and step.files_to_modify %}- Files to modify: {{ step.files_to_modify | join(", ") }}
+{% endif %}{% if step.files_to_avoid is defined and step.files_to_avoid %}- Do NOT modify: {{ step.files_to_avoid | join(", ") }}
+{% endif %}
 {% endfor %}
+
+{% set has_scope = steps | selectattr("target_directories", "defined") | selectattr("target_directories") | list | length > 0 %}
+{% if has_scope %}
+## Allowed Scope
+
+You MUST restrict your changes to the paths listed above in each step. Specifically:
+- Only create files listed in "Files to create" or within "Target directories"
+- Only modify files listed in "Files to modify"
+- NEVER modify files matching "Do NOT modify" patterns (e.g. zz_generated.*, vendor/*)
+- If you believe additional files need modification beyond those listed, do NOT include them
+{% endif %}
 
 ## Repository Context (reference only — not a list of things to change)
 
