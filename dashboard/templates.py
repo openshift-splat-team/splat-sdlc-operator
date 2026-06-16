@@ -41,6 +41,14 @@ _CSS = """
 .sdlc-sidebar-links a:hover {
     background: rgba(255,255,255,.08);
 }
+.sdlc-sidebar-links .sub-label {
+    display: block; padding: 8px 16px;
+    font-size: 0.8rem; font-weight: 600;
+    color: #94a3b8; cursor: default;
+}
+.sdlc-sidebar-links .sub a {
+    padding-left: 32px; font-size: 0.82rem;
+}
 .sdlc-sidebar-section {
     border-bottom: 1px solid #334155;
     padding-bottom: 8px; margin-bottom: 8px;
@@ -229,12 +237,26 @@ function timeAgo(iso) {
     return Math.floor(hr / 24) + 'd ago';
 }
 
+function fmtTokens(w) {
+    return w.total_tokens
+        ? w.total_tokens.toLocaleString() : '\\u2014';
+}
+
 function statusColor(status) {
     if (status === 'RUNNING') return 'pf-m-blue';
     if (status === 'COMPLETED') return 'pf-m-green';
     if (status === 'FAILED' || status === 'TIMED_OUT')
         return 'pf-m-red';
     return '';
+}
+
+function fmtStatusMsg(w) {
+    if (!w.status_message) return '';
+    let ago = '';
+    if (w.status_timestamp) ago = ' · ' + timeAgo(w.status_timestamp);
+    return `<div style="font-size:0.78rem;color:#94a3b8;` +
+        `margin-top:2px;line-height:1.3">` +
+        `${w.status_message}${ago}</div>`;
 }
 
 function prStatusColor(status) {
@@ -292,7 +314,7 @@ function renderWorkflowsTable(workflows) {
     const tbody = document.getElementById('workflows-body');
     if (!workflows || workflows.length === 0) {
         tbody.innerHTML =
-            '<tr><td role="gridcell" colspan="6">' +
+            '<tr><td role="gridcell" colspan="7">' +
             'No workflows found</td></tr>';
         renderPagination();
         return;
@@ -307,6 +329,7 @@ function renderWorkflowsTable(workflows) {
         const phase = w.current_phase
             ? w.current_phase + ': ' + w.current_phase_label
             : '\\u2014';
+        const statusMsg = fmtStatusMsg(w);
         const sel = w.run_id === selectedRunId
             ? ' sdlc-wf-selected' : '';
         rows +=
@@ -320,7 +343,8 @@ function renderWorkflowsTable(workflows) {
             `</span></span></td>` +
             `<td role="gridcell">${w.task_type_label}</td>` +
             `<td role="gridcell"><code>${w.run_id}</code></td>` +
-            `<td role="gridcell">${phase}</td>` +
+            `<td role="gridcell">${phase}${statusMsg}</td>` +
+            `<td role="gridcell">${fmtTokens(w)}</td>` +
             `<td role="gridcell">${timeAgo(w.start_time)}</td>` +
             `<td role="gridcell">` +
             `<a class="pf-v6-c-button pf-m-link pf-m-small"` +
@@ -330,7 +354,7 @@ function renderWorkflowsTable(workflows) {
         if (w.run_id === expandedRunId) {
             rows +=
                 `<tr class="sdlc-detail-row">` +
-                `<td colspan="6" id="detail-${w.run_id}">` +
+                `<td colspan="7" id="detail-${w.run_id}">` +
                 `Loading PRs...</td></tr>`;
         }
     }
@@ -587,10 +611,16 @@ def render_dashboard(
                 </h3>
                 <ul class="sdlc-sidebar-links">
                     <li><a href="/">Dashboard</a></li>
+                    <li><a href="/settings">
+                        Settings</a></li>
                     <li><a href="/status">
                         Service Status</a></li>
-                    <li><a href="/dev">
-                        Developer</a></li>
+                    <li><span class="sub-label">
+                        Developer</span></li>
+                    <li class="sub"><a href="/dev">
+                        Editor</a></li>
+                    <li class="sub"><a href="/dev/tokens">
+                        Token Usage</a></li>
                 </ul>
             </div>
 
@@ -620,13 +650,14 @@ def render_dashboard(
                         <th role="columnheader">Type</th>
                         <th role="columnheader">Run ID</th>
                         <th role="columnheader">Phase</th>
+                        <th role="columnheader">Tokens</th>
                         <th role="columnheader">Started</th>
                         <th role="columnheader"></th>
                     </tr>
                 </thead>
                 <tbody id="workflows-body" role="rowgroup">
                     <tr role="row">
-                        <td role="gridcell" colspan="6">
+                        <td role="gridcell" colspan="7">
                             Loading...
                         </td>
                     </tr>
@@ -800,10 +831,16 @@ def render_status_page(external_urls: dict[str, str]) -> str:
                 </h3>
                 <ul class="sdlc-sidebar-links">
                     <li><a href="/">Dashboard</a></li>
+                    <li><a href="/settings">
+                        Settings</a></li>
                     <li><a href="/status">
                         Service Status</a></li>
-                    <li><a href="/dev">
-                        Developer</a></li>
+                    <li><span class="sub-label">
+                        Developer</span></li>
+                    <li class="sub"><a href="/dev">
+                        Editor</a></li>
+                    <li class="sub"><a href="/dev/tokens">
+                        Token Usage</a></li>
                 </ul>
             </div>
 
@@ -1340,10 +1377,16 @@ def render_dev_page(external_urls: dict[str, str]) -> str:
                 </h3>
                 <ul class="sdlc-sidebar-links">
                     <li><a href="/">Dashboard</a></li>
+                    <li><a href="/settings">
+                        Settings</a></li>
                     <li><a href="/status">
                         Service Status</a></li>
-                    <li><a href="/dev">
-                        Developer</a></li>
+                    <li><span class="sub-label">
+                        Developer</span></li>
+                    <li class="sub"><a href="/dev">
+                        Editor</a></li>
+                    <li class="sub"><a href="/dev/tokens">
+                        Token Usage</a></li>
                 </ul>
             </div>
 
@@ -1367,6 +1410,14 @@ def render_dev_page(external_urls: dict[str, str]) -> str:
             <h2 class="pf-v6-c-title pf-m-lg">
                 Developer Tools
             </h2>
+            <p style="color:#94a3b8;margin-bottom:16px;
+                max-width:700px;font-size:0.9rem">
+                Edit prompt templates and workflow artifacts.
+                Select a workflow run to view and modify its
+                S3 artifacts, or browse the prompt templates
+                that control LLM behavior. Changes to prompts
+                take effect immediately on the next LLM call.
+            </p>
             <div class="pf-v6-c-form__group"
                 style="max-width: 400px; margin-bottom: 16px">
                 <label class="pf-v6-c-form__label"
@@ -1445,5 +1496,775 @@ def render_dev_page(external_urls: dict[str, str]) -> str:
     integrity="sha384-pHG02SG8pId94Np3AbPmBEJ1yPqaH0IkJGLSNGXYmuGhkazT8Lr/57WYpbkGjJtu"
     crossorigin="anonymous"></script>
 <script>{_DEV_JS}</script>
+</body>
+</html>"""
+
+
+_TOKENS_JS = """
+async function loadRuns() {
+    try {
+        const resp = await fetch('/api/workflows');
+        const data = await resp.json();
+        const sel = document.getElementById('tokens-run-select');
+        const seen = new Set();
+        for (const w of data.workflows) {
+            if (seen.has(w.run_id)) continue;
+            seen.add(w.run_id);
+            const opt = document.createElement('option');
+            opt.value = w.run_id;
+            opt.textContent =
+                w.run_id + ' (' + w.task_type_label + ')';
+            sel.appendChild(opt);
+        }
+    } catch (err) {
+        console.error('Failed to load runs:', err);
+    }
+}
+
+async function selectTokenRun(runId) {
+    const container = document.getElementById('tokens-table');
+    if (!runId) {
+        container.innerHTML = '<em>Select a run above</em>';
+        return;
+    }
+    try {
+        const resp = await fetch(
+            '/api/dev/runs/' + runId + '/tokens');
+        const data = await resp.json();
+        renderTokens(data.records);
+    } catch (err) {
+        container.innerHTML =
+            '<em>Failed to load token data</em>';
+    }
+}
+
+function renderTokens(records) {
+    const container = document.getElementById('tokens-table');
+    if (!records || records.length === 0) {
+        container.innerHTML =
+            '<em>No token usage recorded for this run</em>';
+        return;
+    }
+    let totPrompt = 0, totCompletion = 0, totTotal = 0;
+    let rows = '';
+    for (const r of records) {
+        totPrompt += r.prompt_tokens;
+        totCompletion += r.completion_tokens;
+        totTotal += r.total_tokens;
+        rows += `<tr role="row">` +
+            `<td role="gridcell">${r.step}</td>` +
+            `<td role="gridcell">${r.model}</td>` +
+            `<td role="gridcell">${r.prompt_tokens.toLocaleString()}</td>` +
+            `<td role="gridcell">${r.completion_tokens.toLocaleString()}</td>` +
+            `<td role="gridcell">${r.total_tokens.toLocaleString()}</td>` +
+            `<td role="gridcell">${r.timestamp.substring(11, 19)}</td>` +
+            `</tr>`;
+    }
+    rows += `<tr role="row" style="font-weight:700;` +
+        `border-top:2px solid #475569">` +
+        `<td role="gridcell">Total (${records.length} calls)</td>` +
+        `<td role="gridcell"></td>` +
+        `<td role="gridcell">${totPrompt.toLocaleString()}</td>` +
+        `<td role="gridcell">${totCompletion.toLocaleString()}</td>` +
+        `<td role="gridcell">${totTotal.toLocaleString()}</td>` +
+        `<td role="gridcell"></td></tr>`;
+    container.innerHTML =
+        `<table class="pf-v6-c-table pf-m-compact"` +
+        ` role="grid" aria-label="Token usage">` +
+        `<thead><tr role="row">` +
+        `<th role="columnheader">Step</th>` +
+        `<th role="columnheader">Model</th>` +
+        `<th role="columnheader">Prompt</th>` +
+        `<th role="columnheader">Completion</th>` +
+        `<th role="columnheader">Total</th>` +
+        `<th role="columnheader">Time</th>` +
+        `</tr></thead><tbody>` + rows + `</tbody></table>`;
+}
+
+loadRuns();
+"""
+
+
+def render_tokens_page(external_urls: dict[str, str]) -> str:
+    sidebar_links_html = ""
+    link_items = [
+        ("Temporal UI",
+         external_urls.get("Temporal UI", "http://localhost:8233")),
+        ("RustFS Console",
+         external_urls.get("RustFS (S3)", "http://localhost:9001")),
+        ("Gitea",
+         external_urls.get("Gitea", "http://localhost:3000")),
+        ("Jira Simulator",
+         external_urls.get("Jira Simulator", "http://localhost:8080")),
+    ]
+    for label, url in link_items:
+        sidebar_links_html += (
+            f'<li><a href="{url}" target="_blank">'
+            f'{label}</a></li>\n'
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en" class="pf-v6-theme-dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+    <title>Token Usage — SDLC Dashboard</title>
+    <link rel="stylesheet" href="{_PF_CSS_CDN}">
+    <style>{_CSS}</style>
+</head>
+<body>
+<div class="pf-v6-c-page">
+
+    <header class="pf-v6-c-masthead">
+        <div class="pf-v6-c-masthead__main">
+            <span class="pf-v6-c-masthead__brand">
+                SDLC Workflow Dashboard
+            </span>
+        </div>
+    </header>
+
+    <div class="pf-v6-c-page__sidebar pf-m-expanded">
+        <div class="pf-v6-c-page__sidebar-body">
+            <div class="sdlc-sidebar-section">
+                <h3 class="pf-v6-c-title pf-m-md"
+                    style="padding: 16px 16px 8px">
+                    Navigation
+                </h3>
+                <ul class="sdlc-sidebar-links">
+                    <li><a href="/">Dashboard</a></li>
+                    <li><a href="/settings">
+                        Settings</a></li>
+                    <li><a href="/status">
+                        Service Status</a></li>
+                    <li><span class="sub-label">
+                        Developer</span></li>
+                    <li class="sub"><a href="/dev">
+                        Editor</a></li>
+                    <li class="sub"><a href="/dev/tokens">
+                        Token Usage</a></li>
+                </ul>
+            </div>
+            <div class="sdlc-sidebar-section">
+                <h3 class="pf-v6-c-title pf-m-md"
+                    style="padding: 16px 16px 8px">
+                    Quick Links
+                </h3>
+                <ul class="sdlc-sidebar-links">
+                    {sidebar_links_html}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <main class="pf-v6-c-page__main" tabindex="-1">
+    <section class="pf-v6-c-page__main-section">
+
+        <div class="sdlc-section">
+            <h2 class="pf-v6-c-title pf-m-lg">
+                Token Usage
+            </h2>
+            <p style="color:#94a3b8;margin-bottom:16px;
+                max-width:700px;font-size:0.9rem">
+                Track LLM token consumption by workflow step
+                and model. Select a workflow run to see a
+                breakdown of prompt, completion, and total
+                tokens for each activity.
+            </p>
+            <div class="pf-v6-c-form__group"
+                style="max-width: 400px; margin-bottom: 16px">
+                <label class="pf-v6-c-form__label"
+                    for="tokens-run-select">
+                    <span class="pf-v6-c-form__label-text">
+                        Workflow Run
+                    </span>
+                </label>
+                <span class="pf-v6-c-form-control">
+                    <select id="tokens-run-select"
+                        onchange="selectTokenRun(this.value)">
+                        <option value="">Select a run</option>
+                    </select>
+                </span>
+            </div>
+            <div id="tokens-table">
+                <em>Select a run above</em>
+            </div>
+        </div>
+
+    </section>
+    </main>
+
+</div>
+
+<script>{_TOKENS_JS}</script>
+</body>
+</html>"""
+
+
+_CONTEXT_JS = """
+async function loadRuns() {
+    try {
+        const resp = await fetch('/api/workflows');
+        const data = await resp.json();
+        const sel = document.getElementById('ctx-run-select');
+        const seen = new Set();
+        for (const w of data.workflows) {
+            if (seen.has(w.run_id)) continue;
+            seen.add(w.run_id);
+            const opt = document.createElement('option');
+            opt.value = w.run_id;
+            opt.textContent =
+                w.run_id + ' (' + w.task_type_label + ')';
+            sel.appendChild(opt);
+        }
+    } catch (err) {
+        console.error('Failed to load runs:', err);
+    }
+}
+
+let ctxArtifacts = [];
+
+async function selectCtxRun(runId) {
+    const container = document.getElementById('ctx-content');
+    if (!runId) {
+        container.innerHTML = '<em>Select a run above</em>';
+        return;
+    }
+    try {
+        const resp = await fetch(
+            '/api/dev/runs/' + runId + '/artifacts');
+        const data = await resp.json();
+        ctxArtifacts = data.artifacts || [];
+        renderCtxList();
+    } catch (err) {
+        container.innerHTML =
+            '<em>Failed to load artifacts</em>';
+    }
+}
+
+function renderCtxList() {
+    const container = document.getElementById('ctx-content');
+    if (ctxArtifacts.length === 0) {
+        container.innerHTML =
+            '<em>No artifacts found for this run</em>';
+        return;
+    }
+    let html = '';
+    for (let i = 0; i < ctxArtifacts.length; i++) {
+        const a = ctxArtifacts[i];
+        html +=
+            `<div style="border:1px solid #334155;` +
+            `border-radius:6px;margin-bottom:8px;` +
+            `overflow:hidden">` +
+            `<div style="padding:8px 14px;cursor:pointer;` +
+            `display:flex;justify-content:space-between"` +
+            ` onclick="toggleCtx(${i})">` +
+            `<span style="font-weight:600;` +
+            `font-size:0.9rem">${a.key}</span>` +
+            `</div>` +
+            `<div id="ctx-body-${i}" style="display:none;` +
+            `border-top:1px solid #334155;` +
+            `max-height:500px;overflow:auto">` +
+            `<pre style="margin:0;padding:12px 14px;` +
+            `font-size:0.8rem;line-height:1.4;` +
+            `white-space:pre-wrap;word-break:break-word">` +
+            `${escHtml(JSON.stringify(a.data, null, 2))}` +
+            `</pre></div></div>`;
+    }
+    container.innerHTML = html;
+}
+
+function toggleCtx(idx) {
+    const el = document.getElementById('ctx-body-' + idx);
+    if (!el) return;
+    el.style.display =
+        el.style.display === 'block' ? 'none' : 'block';
+}
+
+function escHtml(s) {
+    return s.replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+loadRuns();
+"""
+
+
+def render_context_page(external_urls: dict[str, str]) -> str:
+    sidebar_links_html = ""
+    link_items = [
+        ("Temporal UI",
+         external_urls.get("Temporal UI", "http://localhost:8233")),
+        ("RustFS Console",
+         external_urls.get("RustFS (S3)", "http://localhost:9001")),
+        ("Gitea",
+         external_urls.get("Gitea", "http://localhost:3000")),
+        ("Jira Simulator",
+         external_urls.get("Jira Simulator", "http://localhost:8080")),
+    ]
+    for label, url in link_items:
+        sidebar_links_html += (
+            f'<li><a href="{url}" target="_blank">'
+            f'{label}</a></li>\n'
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en" class="pf-v6-theme-dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+    <title>Context — SDLC Dashboard</title>
+    <link rel="stylesheet" href="{_PF_CSS_CDN}">
+    <style>{_CSS}</style>
+</head>
+<body>
+<div class="pf-v6-c-page">
+
+    <header class="pf-v6-c-masthead">
+        <div class="pf-v6-c-masthead__main">
+            <span class="pf-v6-c-masthead__brand">
+                SDLC Workflow Dashboard
+            </span>
+        </div>
+    </header>
+
+    <div class="pf-v6-c-page__sidebar pf-m-expanded">
+        <div class="pf-v6-c-page__sidebar-body">
+            <div class="sdlc-sidebar-section">
+                <h3 class="pf-v6-c-title pf-m-md"
+                    style="padding: 16px 16px 8px">
+                    Navigation
+                </h3>
+                <ul class="sdlc-sidebar-links">
+                    <li><a href="/">Dashboard</a></li>
+                    <li><a href="/settings">
+                        Settings</a></li>
+                    <li><a href="/status">
+                        Service Status</a></li>
+                    <li><span class="sub-label">
+                        Developer</span></li>
+                    <li class="sub"><a href="/dev">
+                        Editor</a></li>
+                    <li class="sub"><a href="/dev/tokens">
+                        Token Usage</a></li>
+                </ul>
+            </div>
+            <div class="sdlc-sidebar-section">
+                <h3 class="pf-v6-c-title pf-m-md"
+                    style="padding: 16px 16px 8px">
+                    Quick Links
+                </h3>
+                <ul class="sdlc-sidebar-links">
+                    {sidebar_links_html}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <main class="pf-v6-c-page__main" tabindex="-1">
+    <section class="pf-v6-c-page__main-section">
+
+        <div class="sdlc-section">
+            <h2 class="pf-v6-c-title pf-m-lg">
+                Workflow Context
+            </h2>
+            <div class="pf-v6-c-form__group"
+                style="max-width: 400px; margin-bottom: 16px">
+                <label class="pf-v6-c-form__label"
+                    for="ctx-run-select">
+                    <span class="pf-v6-c-form__label-text">
+                        Workflow Run
+                    </span>
+                </label>
+                <span class="pf-v6-c-form-control">
+                    <select id="ctx-run-select"
+                        onchange="selectCtxRun(this.value)">
+                        <option value="">Select a run</option>
+                    </select>
+                </span>
+            </div>
+            <div id="ctx-content">
+                <em>Select a run to view step contexts</em>
+            </div>
+        </div>
+
+    </section>
+    </main>
+
+</div>
+
+<script>{_CONTEXT_JS}</script>
+</body>
+</html>"""
+
+
+_SETTINGS_CSS = """
+.sdlc-settings-form {
+    max-width: 900px;
+}
+.sdlc-agent-card {
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+.sdlc-agent-card h4 {
+    margin: 0 0 4px 0; font-size: 0.95rem;
+}
+.sdlc-agent-card .agent-desc {
+    font-size: 0.8rem; color: #94a3b8;
+    margin-bottom: 12px;
+}
+.sdlc-agent-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.sdlc-settings-banner {
+    padding: 12px 16px; border-radius: 6px;
+    margin-bottom: 16px; display: none;
+}
+.sdlc-settings-banner.show { display: block; }
+.sdlc-settings-banner.pf-m-warning {
+    background: rgba(240,171,0,.12);
+    border: 1px solid #f0ab00;
+    color: #f0ab00;
+}
+.sdlc-settings-banner.pf-m-success {
+    background: rgba(34,197,94,.1);
+    border: 1px solid #22c55e;
+    color: #22c55e;
+}
+.sdlc-model-hint {
+    font-size: 0.78rem; color: #94a3b8;
+    margin-bottom: 16px; line-height: 1.5;
+}
+.sdlc-model-hint code {
+    background: rgba(255,255,255,.06);
+    padding: 1px 5px; border-radius: 3px;
+}
+"""
+
+_SETTINGS_JS = """
+const AGENTS = [
+    {key: 'orchestrator', name: 'Orchestrator',
+     desc: 'Routes tasks to other agents; typically no LLM calls.'},
+    {key: 'requirements-agent', name: 'Requirements Agent',
+     desc: 'Fetches Jira epics and produces requirement specs.'},
+    {key: 'github-agent', name: 'GitHub Agent',
+     desc: 'Analyzes PRs, generates code, manages branches.'},
+    {key: 'enhancement-agent', name: 'Enhancement Agent',
+     desc: 'Generates enhancement documents and PR lifecycle.'},
+    {key: 'openshift-agent', name: 'OpenShift Agent',
+     desc: 'Identifies repos, analyzes features, CI requirements.'},
+    {key: 'jira-agent', name: 'Jira Agent',
+     desc: 'Proposes, sizes, and prioritizes Jira stories.'},
+];
+
+let llmConfig = {default: {}, agents: {}};
+
+async function loadLLMConfig() {
+    try {
+        const resp = await fetch('/api/settings/llm');
+        llmConfig = await resp.json();
+        populateForm();
+    } catch (err) {
+        console.error('Failed to load LLM config:', err);
+    }
+}
+
+function populateForm() {
+    const d = llmConfig.default || {};
+    setVal('default-model', d.model);
+    setVal('default-api-base', d.api_base);
+    setVal('default-vertex-project', d.vertex_project);
+    setVal('default-vertex-location', d.vertex_location);
+
+    for (const agent of AGENTS) {
+        const cfg = (llmConfig.agents || {})[agent.key] || {};
+        setVal(agent.key + '-model', cfg.model);
+        setVal(agent.key + '-api-base', cfg.api_base);
+    }
+}
+
+function setVal(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.value = val || '';
+}
+
+function getVal(id) {
+    const el = document.getElementById(id);
+    return el ? el.value.trim() : '';
+}
+
+async function saveLLMConfig() {
+    const btn = document.getElementById('btn-save-llm');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    const payload = {
+        default: {
+            model: getVal('default-model') || '',
+            api_key: (llmConfig.default || {}).api_key || '',
+            api_base: getVal('default-api-base') || null,
+            vertex_project: getVal('default-vertex-project') || null,
+            vertex_location: getVal('default-vertex-location') || null,
+        },
+        agents: {},
+    };
+
+    for (const agent of AGENTS) {
+        const existing = (llmConfig.agents || {})[agent.key] || {};
+        payload.agents[agent.key] = {
+            model: getVal(agent.key + '-model') || '',
+            api_key: existing.api_key || '',
+            api_base: getVal(agent.key + '-api-base') || null,
+        };
+    }
+
+    try {
+        const resp = await fetch('/api/settings/llm', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            showBanner('success',
+                'Configuration saved. Restart workers to apply.');
+            loadLLMConfig();
+        } else {
+            showBanner('warning',
+                'Error: ' + (data.detail || 'save failed'));
+        }
+    } catch (err) {
+        showBanner('warning', 'Network error: ' + err.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save Configuration';
+    }
+}
+
+function showBanner(type, msg) {
+    const el = document.getElementById('settings-banner');
+    el.className = 'sdlc-settings-banner show pf-m-' + type;
+    el.textContent = msg;
+}
+
+loadLLMConfig();
+"""
+
+
+def render_settings_page(external_urls: dict[str, str]) -> str:
+    sidebar_links_html = ""
+    link_items = [
+        ("Temporal UI",
+         external_urls.get("Temporal UI", "http://localhost:8233")),
+        ("RustFS Console",
+         external_urls.get("RustFS (S3)", "http://localhost:9001")),
+        ("Gitea",
+         external_urls.get("Gitea", "http://localhost:3000")),
+        ("Jira Simulator",
+         external_urls.get("Jira Simulator", "http://localhost:8080")),
+    ]
+    for label, url in link_items:
+        sidebar_links_html += (
+            f'<li><a href="{url}" target="_blank">'
+            f'{label}</a></li>\n'
+        )
+
+    agent_cards = ""
+    agents = [
+        ("orchestrator", "Orchestrator",
+         "Routes tasks to other agents; typically no LLM calls."),
+        ("requirements-agent", "Requirements Agent",
+         "Fetches Jira epics and produces requirement specs."),
+        ("github-agent", "GitHub Agent",
+         "Analyzes PRs, generates code, manages branches."),
+        ("enhancement-agent", "Enhancement Agent",
+         "Generates enhancement documents and PR lifecycle."),
+        ("openshift-agent", "OpenShift Agent",
+         "Identifies repos, analyzes features, CI requirements."),
+        ("jira-agent", "Jira Agent",
+         "Proposes, sizes, and prioritizes Jira stories."),
+    ]
+    for key, name, desc in agents:
+        agent_cards += f"""
+            <div class="sdlc-agent-card">
+                <h4>{name}</h4>
+                <div class="agent-desc">{desc}</div>
+                <div class="sdlc-agent-fields">
+                    <div class="pf-v6-c-form__group">
+                        <label class="pf-v6-c-form__label"
+                            for="{key}-model">
+                            <span class="pf-v6-c-form__label-text">
+                                Model</span></label>
+                        <span class="pf-v6-c-form-control">
+                            <input type="text" id="{key}-model"
+                                placeholder="inherits from default">
+                        </span>
+                    </div>
+                    <div class="pf-v6-c-form__group">
+                        <label class="pf-v6-c-form__label"
+                            for="{key}-api-base">
+                            <span class="pf-v6-c-form__label-text">
+                                API Base URL</span></label>
+                        <span class="pf-v6-c-form-control">
+                            <input type="text" id="{key}-api-base"
+                                placeholder="inherits from default">
+                        </span>
+                    </div>
+                </div>
+            </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en" class="pf-v6-theme-dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+    <title>Settings — SDLC Dashboard</title>
+    <link rel="stylesheet" href="{_PF_CSS_CDN}">
+    <style>{_CSS}
+{_SETTINGS_CSS}</style>
+</head>
+<body>
+<div class="pf-v6-c-page">
+
+    <header class="pf-v6-c-masthead">
+        <div class="pf-v6-c-masthead__main">
+            <span class="pf-v6-c-masthead__brand">
+                SDLC Workflow Dashboard
+            </span>
+        </div>
+    </header>
+
+    <div class="pf-v6-c-page__sidebar pf-m-expanded">
+        <div class="pf-v6-c-page__sidebar-body">
+            <div class="sdlc-sidebar-section">
+                <h3 class="pf-v6-c-title pf-m-md"
+                    style="padding: 16px 16px 8px">
+                    Navigation
+                </h3>
+                <ul class="sdlc-sidebar-links">
+                    <li><a href="/">Dashboard</a></li>
+                    <li><a href="/settings">Settings</a></li>
+                    <li><a href="/status">
+                        Service Status</a></li>
+                    <li><span class="sub-label">
+                        Developer</span></li>
+                    <li class="sub"><a href="/dev">
+                        Editor</a></li>
+                    <li class="sub"><a href="/dev/tokens">
+                        Token Usage</a></li>
+                </ul>
+            </div>
+            <div class="sdlc-sidebar-section">
+                <h3 class="pf-v6-c-title pf-m-md"
+                    style="padding: 16px 16px 8px">
+                    Quick Links
+                </h3>
+                <ul class="sdlc-sidebar-links">
+                    {sidebar_links_html}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <main class="pf-v6-c-page__main" tabindex="-1">
+    <section class="pf-v6-c-page__main-section">
+
+        <div class="sdlc-section sdlc-settings-form">
+            <h2 class="pf-v6-c-title pf-m-lg">
+                LLM Configuration
+            </h2>
+            <div class="sdlc-model-hint">
+                Model strings follow LiteLLM format:
+                <code>ollama/model</code>
+                <code>openai/model</code>
+                <code>anthropic/model</code>
+                <code>vertex_ai/model</code>
+                &mdash; leave blank to inherit from environment
+                variables.
+            </div>
+
+            <div id="settings-banner"
+                class="sdlc-settings-banner"></div>
+
+            <h3 class="pf-v6-c-title pf-m-md"
+                style="margin-bottom:12px">
+                Defaults
+            </h3>
+            <div class="sdlc-agent-card">
+                <div class="sdlc-agent-fields">
+                    <div class="pf-v6-c-form__group">
+                        <label class="pf-v6-c-form__label"
+                            for="default-model">
+                            <span class="pf-v6-c-form__label-text">
+                                Model</span></label>
+                        <span class="pf-v6-c-form-control">
+                            <input type="text"
+                                id="default-model"
+                                placeholder="openai/gpt-4o">
+                        </span>
+                    </div>
+                    <div class="pf-v6-c-form__group">
+                        <label class="pf-v6-c-form__label"
+                            for="default-api-base">
+                            <span class="pf-v6-c-form__label-text">
+                                API Base URL</span></label>
+                        <span class="pf-v6-c-form-control">
+                            <input type="text"
+                                id="default-api-base"
+                                placeholder="from LLM_API_BASE env">
+                        </span>
+                    </div>
+                    <div class="pf-v6-c-form__group">
+                        <label class="pf-v6-c-form__label"
+                            for="default-vertex-project">
+                            <span class="pf-v6-c-form__label-text">
+                                Vertex Project</span></label>
+                        <span class="pf-v6-c-form-control">
+                            <input type="text"
+                                id="default-vertex-project"
+                                placeholder="my-gcp-project">
+                        </span>
+                    </div>
+                    <div class="pf-v6-c-form__group">
+                        <label class="pf-v6-c-form__label"
+                            for="default-vertex-location">
+                            <span class="pf-v6-c-form__label-text">
+                                Vertex Location</span></label>
+                        <span class="pf-v6-c-form-control">
+                            <input type="text"
+                                id="default-vertex-location"
+                                placeholder="us-central1">
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <h3 class="pf-v6-c-title pf-m-md"
+                style="margin: 20px 0 12px">
+                Per-Agent Overrides
+            </h3>
+            {agent_cards}
+
+            <div style="margin-top: 16px">
+                <button id="btn-save-llm"
+                    class="pf-v6-c-button pf-m-primary"
+                    onclick="saveLLMConfig()">
+                    Save Configuration
+                </button>
+            </div>
+        </div>
+
+    </section>
+    </main>
+
+</div>
+
+<script>{_SETTINGS_JS}</script>
 </body>
 </html>"""

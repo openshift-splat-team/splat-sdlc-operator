@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -25,7 +27,7 @@ from agents.common.settings import BaseAgentSettings
 from agents.orchestrator.workflows import SDLCOrchestratorWorkflow
 
 from .health import ServiceStatus, get_health
-from .templates import render_dashboard, render_status_page
+from .templates import render_dashboard, render_settings_page, render_status_page
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,106 @@ async def api_health() -> JSONResponse:
 @app.get("/api/health/ready")
 async def api_ready() -> JSONResponse:
     return JSONResponse({"status": "ok"})
+
+
+# ── LLM settings ─────────────────────────────────────────────────────────────
+
+_LLM_CONFIG_PATH = Path(
+    os.environ.get("LLM_CONFIG_PATH", "./llm_config.yaml")
+)
+
+_LLM_CONFIG_HEADER = """\
+# Per-agent LLM model configuration.
+#
+# Model string format follows LiteLLM conventions:
+#   ollama/<model>              local Ollama
+#   openai/<model>              OpenAI or any OpenAI-compatible server
+#   anthropic/<model>           Anthropic Claude
+#   vertex_ai/<model>           Google Vertex AI
+"""
+
+_AGENT_FIELDS = ("model", "api_key", "api_base", "vertex_project", "vertex_location")
+_MASK = "****"
+
+
+def _mask_keys(data: dict[str, Any]) -> dict[str, Any]:
+    out = {}
+    for section_key in ("default", "agents"):
+        section = data.get(section_key)
+        if section is None:
+            continue
+        if section_key == "default":
+            out["default"] = {
+                k: (_MASK if k == "api_key" and v else v)
+                for k, v in section.items()
+                if k in _AGENT_FIELDS
+            }
+        else:
+            out["agents"] = {}
+            for agent, cfg in section.items():
+                out["agents"][agent] = {
+                    k: (_MASK if k == "api_key" and v else v)
+                    for k, v in (cfg or {}).items()
+                    if k in _AGENT_FIELDS
+                }
+    return out
+
+
+@app.get("/api/settings/llm")
+async def api_get_llm_settings() -> JSONResponse:
+    import yaml  # noqa: PLC0415
+    if not _LLM_CONFIG_PATH.exists():
+        return JSONResponse({"default": {}, "agents": {}})
+    try:
+        data = yaml.safe_load(_LLM_CONFIG_PATH.read_text()) or {}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to read config: {exc}",
+        ) from exc
+    return JSONResponse(_mask_keys(data))
+
+
+@app.put("/api/settings/llm")
+async def api_put_llm_settings(request: Any) -> JSONResponse:
+    import yaml  # noqa: PLC0415
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="Expected JSON object")
+
+    existing: dict[str, Any] = {}
+    if _LLM_CONFIG_PATH.exists():
+        existing = yaml.safe_load(
+            _LLM_CONFIG_PATH.read_text(),
+        ) or {}
+
+    new_default = body.get("default", {})
+    for k in _AGENT_FIELDS:
+        val = new_default.get(k)
+        if k == "api_key" and val == _MASK:
+            new_default[k] = (existing.get("default") or {}).get(
+                "api_key", "",
+            )
+
+    new_agents: dict[str, Any] = {}
+    for agent, cfg in body.get("agents", {}).items():
+        agent_cfg = dict(cfg) if cfg else {}
+        if agent_cfg.get("api_key") == _MASK:
+            agent_cfg["api_key"] = (
+                (existing.get("agents") or {}).get(agent) or {}
+            ).get("api_key", "")
+        new_agents[agent] = agent_cfg
+
+    output = {"default": new_default, "agents": new_agents}
+    try:
+        content = _LLM_CONFIG_HEADER + "\n" + yaml.dump(
+            output, default_flow_style=False, sort_keys=False,
+        )
+        _LLM_CONFIG_PATH.write_text(content)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to write config: {exc}",
+        ) from exc
+    return JSONResponse({"saved": True, "restart_required": True})
 
 
 # ── Workflow listing ──────────────────────────────────────────────────────────
@@ -202,6 +304,29 @@ async def _list_workflows() -> tuple[list[dict[str, Any]], dict[str, str]]:
             entry["current_phase"] = phase
             entry["current_phase_label"] = label
 
+    from agents.common.storage import get_json  # noqa: PLC0415
+
+    for entry in results:
+        usage = get_json(
+            f"runs/{entry['run_id']}/token-usage.json", settings,
+        )
+        if isinstance(usage, list) and usage:
+            entry["total_tokens"] = sum(
+                r.get("total_tokens", 0) for r in usage
+            )
+        else:
+            entry["total_tokens"] = 0
+
+        status_data = get_json(
+            f"runs/{entry['run_id']}/status.json", settings,
+        )
+        if isinstance(status_data, dict):
+            entry["status_message"] = status_data.get("message")
+            entry["status_timestamp"] = status_data.get("timestamp")
+        else:
+            entry["status_message"] = None
+            entry["status_timestamp"] = None
+
     results.sort(key=lambda e: e["start_time"], reverse=True)
     return results, child_statuses
 
@@ -216,6 +341,18 @@ async def api_workflows() -> JSONResponse:
     _wf_cache["children"] = children
     _wf_cache["ts"] = now
     return JSONResponse({"workflows": data})
+
+
+# ── Workflow status ───────────────────────────────────────────────────────────
+
+
+@app.get("/api/workflows/{run_id}/status")
+async def api_workflow_status(run_id: str) -> JSONResponse:
+    from agents.common.storage import get_json  # noqa: PLC0415
+    status_data = get_json(f"runs/{run_id}/status.json", settings)
+    if not isinstance(status_data, dict):
+        return JSONResponse({"status": None})
+    return JSONResponse({"status": status_data})
 
 
 # ── Workflow PR details ───────────────────────────────────────────────────────
@@ -749,6 +886,15 @@ async def api_dev_save_prompt(
     return JSONResponse({"saved": path})
 
 
+@app.get("/api/dev/runs/{run_id}/tokens")
+async def api_dev_tokens(run_id: str) -> JSONResponse:
+    from agents.common.storage import get_json  # noqa: PLC0415
+
+    data = get_json(f"runs/{run_id}/token-usage.json", settings)
+    records: list[dict[str, Any]] = data if isinstance(data, list) else []
+    return JSONResponse({"records": records})
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 
@@ -771,3 +917,20 @@ async def status_page() -> HTMLResponse:
 async def dev_page() -> HTMLResponse:
     from .templates import render_dev_page  # noqa: PLC0415
     return HTMLResponse(render_dev_page(_external_urls()))
+
+
+@app.get("/dev/tokens", include_in_schema=False)
+async def dev_tokens_page() -> HTMLResponse:
+    from .templates import render_tokens_page  # noqa: PLC0415
+    return HTMLResponse(render_tokens_page(_external_urls()))
+
+
+@app.get("/dev/context", include_in_schema=False)
+async def dev_context_page() -> HTMLResponse:
+    from .templates import render_context_page  # noqa: PLC0415
+    return HTMLResponse(render_context_page(_external_urls()))
+
+
+@app.get("/settings", include_in_schema=False)
+async def settings_page() -> HTMLResponse:
+    return HTMLResponse(render_settings_page(_external_urls()))
