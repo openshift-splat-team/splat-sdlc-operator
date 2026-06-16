@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import litellm
@@ -13,6 +15,50 @@ from agents.common.settings import BaseAgentSettings
 T = TypeVar("T", bound=BaseModel)
 
 litellm.drop_params = True  # ignore unsupported params silently
+
+_log = logging.getLogger(__name__)
+
+
+def _store_usage(
+    run_id: str,
+    step: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_tokens: int,
+    settings: BaseAgentSettings,
+) -> None:
+    from agents.common.storage import get_json, put_json
+
+    key = f"runs/{run_id}/token-usage.json"
+    existing = get_json(key, settings)
+    records: list[dict[str, Any]] = existing if isinstance(existing, list) else []
+    records.append({
+        "timestamp": datetime.now(UTC).isoformat(),
+        "run_id": run_id,
+        "step": step,
+        "model": model,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    })
+    try:
+        put_json(key, records, settings)
+    except Exception:
+        _log.warning("Failed to store token usage for %s", run_id, exc_info=True)
+
+
+def _get_activity_context() -> tuple[str | None, str | None]:
+    """Extract run_id and activity name from Temporal context, if available."""
+    try:
+        from temporalio import activity as _act
+        info = _act.info()
+        wf_id = info.workflow_id or ""
+        parts = wf_id.split("-", 1)
+        run_id = parts[0] if len(parts) >= 2 else wf_id
+        return run_id, info.activity_type
+    except Exception:
+        return None, None
 
 
 async def complete(
@@ -51,6 +97,20 @@ async def complete(
         **extra,
         **kwargs,
     )
+
+    if response.usage:
+        run_id, step = _get_activity_context()
+        if run_id:
+            _store_usage(
+                run_id=run_id,
+                step=step or "unknown",
+                model=model,
+                prompt_tokens=response.usage.prompt_tokens or 0,
+                completion_tokens=response.usage.completion_tokens or 0,
+                total_tokens=response.usage.total_tokens or 0,
+                settings=settings,
+            )
+
     return response.choices[0].message.content or ""
 
 
