@@ -13,6 +13,8 @@ checks use a 5-second TTL cache.
 
 ### Dashboard (`/`)
 
+![Dashboard main page](images/dashboard-main.png)
+
 The main page has three sections:
 
 **Workflows table** -- lists all `sdlc-*` workflows from Temporal, most recent
@@ -54,6 +56,8 @@ OpenShift Feature, Full SDLC, Implement Feature, Enhancement Review.
 
 ### Service Status (`/status`)
 
+![Service Status page](images/dashboard-status.png)
+
 Two tables showing the health of all system components, refreshed every 10
 seconds.
 
@@ -84,6 +88,8 @@ worker is healthy if it has at least one active poller on its task queue.
 
 ### Developer -- Editor (`/dev`)
 
+![Developer Editor page](images/dashboard-dev.png)
+
 A split-pane editor with a file tree on the left and Monaco Editor on the right.
 Two categories of files are available:
 
@@ -106,6 +112,8 @@ prompts:
 
 ### Developer -- Token Usage (`/dev/tokens`)
 
+![Token Usage page](images/dashboard-tokens.png)
+
 Shows LLM token consumption for a selected workflow run, broken down by step
 and model. Columns: Step, Model, Prompt Tokens, Completion Tokens, Total Tokens.
 
@@ -117,6 +125,8 @@ call and stored in S3 at `runs/{run_id}/token-usage.json`.
 Artifact context viewer for a selected workflow run.
 
 ### Settings (`/settings`)
+
+![Settings page](images/dashboard-settings.png)
 
 Per-agent LLM model configuration. Edit model routing (model string, API base,
 API key) for the default and per-agent overrides. API keys are masked in the UI.
