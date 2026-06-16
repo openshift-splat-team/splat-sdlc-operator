@@ -338,6 +338,7 @@ make dev
 This starts PostgreSQL (Temporal backend), Temporal, RustFS, Ollama, pulls the configured model, Gitea, the dep-tree MCP server, then starts all workers. First run takes a few minutes while Ollama downloads the model. Temporal DB and RustFS data are persisted via named volumes across restarts.
 
 ```
+  Dashboard:          http://localhost:8501
   Temporal UI:        http://localhost:8233
   RustFS console:     http://localhost:9001  (rustfsadmin / rustfsadmin)
   Ollama API:         http://localhost:11434
@@ -362,7 +363,7 @@ In a second terminal:
 make dev-trigger
 ```
 
-Follow the prompts, then watch the workflow in the Temporal UI at **http://localhost:8233**.
+Follow the prompts, then watch the workflow in the Dashboard at **http://localhost:8501** or the Temporal UI at **http://localhost:8233**.
 
 For a full end-to-end SDLC run, select `full_sdlc` and provide:
 - `jira_epic_id` — optional; creates a new epic if omitted. If provided, the feature description is fetched automatically from Jira.
@@ -674,6 +675,7 @@ make dev-reload      # restart all worker containers (picks up code changes)
 make dev-rebuild     # rebuild and restart workers (after pyproject.toml/uv.lock changes)
 make dev-restart W=github-agent  # restart a single worker
 make dev-trigger     # trigger a workflow interactively
+make dev-dashboard   # run dashboard locally with hot reload (outside compose)
 make jira-seed       # import test_data/*.xlsx into the local Jira simulator
 make jira-seed-force # re-import, overwriting existing data
 make gitea-mirror-repo REPO=owner/name  # mirror a GitHub repo into Gitea
@@ -681,6 +683,18 @@ make trigger-enhancement-review  # re-run enhancement review on an existing PR
 ```
 
 Code changes to `agents/` and `prompts/` are picked up immediately by running workers (volume-mounted in compose). Use `make dev-reload` to restart workers if needed. Dependency changes (`pyproject.toml`) require `make dev-rebuild`.
+
+### Dashboard
+
+The dashboard at **http://localhost:8501** provides:
+
+- **Workflows** -- live table of running and recent workflows with status, current phase, and expandable PR details with per-repo progress status
+- **SDLC Lifecycle diagram** -- visual flow of the 10-phase FullSDLCWorkflow, auto-highlighting the active phase
+- **Trigger Workflow** -- form to start any workflow type directly from the browser
+- **Service Status** (`/status`) -- infrastructure and agent worker health tables
+- **Developer Tools** (`/dev`) -- Monaco-based editor for prompt templates and S3 artifacts, with the ability to re-run individual workflow steps
+
+Prompt template edits from the Developer page take effect immediately on the next LLM call (`auto_reload=True` on the Jinja2 environment). The dashboard runs with `--reload` in compose, so its own code changes also apply without restart.
 
 ---
 

@@ -311,6 +311,20 @@ class FullSDLCWorkflow:
         )
         workflow.logger.info("Enhancement PR: %s", enhancement_pr.url)
 
+        from agents.github_agent.activities import store_created_pr  # noqa: PLC0415
+
+        await workflow.execute_activity(
+            store_created_pr,
+            args=[enhancement_pr, run_id],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_attempts=3,
+            ),
+            task_queue="github-agent",
+        )
+
         design_story = await workflow.execute_child_workflow(
             CreateDesignDocStoryWorkflow.run,
             args=[epic.key, enhancement_pr.url],
@@ -491,6 +505,20 @@ class FullSDLCWorkflow:
             id=f"{run_id}-setup-staging",
             task_queue="github-agent",
             execution_timeout=timedelta(minutes=10),
+        )
+
+        from agents.github_agent.activities import store_staging_plan  # noqa: PLC0415
+
+        await workflow.execute_activity(
+            store_staging_plan,
+            args=[staging_plan, run_id],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_attempts=3,
+            ),
+            task_queue="github-agent",
         )
 
         # Phase I — Generate and commit code changes (one PR per repo)

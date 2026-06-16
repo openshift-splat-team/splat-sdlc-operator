@@ -11,7 +11,8 @@ _PROMPTS_DIR = Path(__file__).parents[2] / "prompts"
 
 _env = Environment(
     loader=FileSystemLoader(str(_PROMPTS_DIR)),
-    undefined=StrictUndefined,  # raise on missing variables rather than silently blank
+    undefined=StrictUndefined,
+    auto_reload=True,
     trim_blocks=True,
     lstrip_blocks=True,
     keep_trailing_newline=True,

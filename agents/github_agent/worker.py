@@ -34,6 +34,7 @@ from agents.github_agent.activities import (
     store_created_pr,
     store_implementation_result,
     store_review,
+    store_staging_plan,
     update_pr_description,
 )
 from agents.github_agent.workflows import (
@@ -81,6 +82,7 @@ async def main() -> None:
             mirror_repository, fork_repository, create_feature_branch, create_staging_pr,
             poll_pr_for_label_drop, process_pr_comments, apply_file_changes,
             post_pr_comment, reset_agent_hold_label,
+            store_staging_plan,
             fetch_repo_context, generate_code_for_bundle, update_pr_description,
             remove_agent_hold, store_implementation_result,
             fetch_repo_ci_config, run_repo_tests, generate_test_fixes,

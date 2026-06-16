@@ -59,6 +59,7 @@ Once the stack is running:
 
 | Service | URL | Credentials |
 |---|---|---|
+| Dashboard | http://localhost:8501 | -- |
 | Temporal UI | http://localhost:8233 | -- |
 | RustFS Console | http://localhost:9001 | rustfsadmin / rustfsadmin |
 | Ollama API | http://localhost:11434 | -- |

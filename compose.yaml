@@ -253,7 +253,7 @@ services:
     volumes:
       - ./agents:/app/agents:ro,z
       - ./dashboard:/app/dashboard:ro,z
-      - ./prompts:/app/prompts:ro,z
+      - ./prompts:/app/prompts:z
       - ./scripts:/app/scripts:ro,z
       - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-credentials.json}:/secrets/gcp-credentials.json:ro,z
     environment:

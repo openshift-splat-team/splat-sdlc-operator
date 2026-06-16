@@ -18,6 +18,7 @@ from agents.common.models import (
     PRMonitorEvent,
     RepoPRBundle,
     ReviewResult,
+    StagingPlan,
     StagingRepo,
     TestResult,
 )
@@ -98,6 +99,14 @@ async def store_created_pr(pr: CreatedPR, run_id: str) -> str:
     key = f"runs/{run_id}/created-pr.json"
     activity.logger.info("Storing created PR record to S3 key %s", key)
     return storage.put_artifact(key, pr, settings)
+
+
+@activity.defn
+async def store_staging_plan(plan: StagingPlan, run_id: str) -> str:
+    settings = GitHubAgentSettings()
+    key = f"runs/{run_id}/staging-plan.json"
+    activity.logger.info("Storing staging plan to S3 key %s", key)
+    return storage.put_artifact(key, plan, settings)
 
 
 # ── Staging / fork / monitoring activities ────────────────────────────────────
