@@ -276,10 +276,17 @@ class StoryPlan(BaseModel):
 
 # ── Comment processing models ─────────────────────────────────────────────────
 
+class FileEdit(BaseModel):
+    search: str
+    replace: str
+
+
 class FileChange(BaseModel):
     path: str
-    content: str
+    content: str = ""
     commit_message: str
+    action: Literal["create", "modify"] = "create"
+    edits: list[FileEdit] = []
 
 
 class CommentProcessingResult(BaseModel):

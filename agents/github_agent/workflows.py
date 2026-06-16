@@ -27,6 +27,7 @@ with workflow.unsafe.imports_passed_through():
         create_feature_branch,
         create_pr,
         create_staging_pr,
+        fetch_files_for_editing,
         fetch_pr,
         fetch_repo_ci_config,
         fetch_repo_context,
@@ -504,9 +505,28 @@ class CodeGenerationWorkflow:
             retry_policy=_STANDARD_RETRY,
         )
 
+        files_to_modify = []
+        for s in bundle.steps:
+            if hasattr(s, "files_to_modify"):
+                files_to_modify.extend(s.files_to_modify)
+        files_to_modify = list(dict.fromkeys(files_to_modify))
+
+        existing_files: dict[str, str] = {}
+        if files_to_modify:
+            existing_files = await workflow.execute_activity(
+                fetch_files_for_editing,
+                args=[staging_repo, files_to_modify],
+                start_to_close_timeout=timedelta(seconds=120),
+                retry_policy=_STANDARD_RETRY,
+            )
+            workflow.logger.info(
+                "Fetched %d existing files for editing: %s",
+                len(existing_files), list(existing_files.keys()),
+            )
+
         file_changes = await workflow.execute_activity(
             generate_code_for_bundle,
-            args=[bundle, feature_description, repo_context],
+            args=[bundle, feature_description, repo_context, existing_files],
             start_to_close_timeout=timedelta(minutes=20),
             retry_policy=_LLM_RETRY,
         )

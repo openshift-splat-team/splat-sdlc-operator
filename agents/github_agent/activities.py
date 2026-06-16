@@ -13,6 +13,7 @@ from agents.common.models import (
     CreatedPR,
     FeatureImplementationResult,
     FileChange,
+    FileEdit,
     InlineComment,
     PRData,
     PRMonitorEvent,
@@ -263,20 +264,30 @@ async def process_pr_comments(staging_repo: StagingRepo, comments: list[str]) ->
 async def apply_file_changes(staging_repo: StagingRepo, file_changes: list[FileChange]) -> None:
     settings = GitHubAgentSettings()
     fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    branch = staging_repo.feature_branch
     activity.logger.info(
         "Applying %d file changes to %s on branch %s",
-        len(file_changes), fork_slug, staging_repo.feature_branch,
+        len(file_changes), fork_slug, branch,
     )
     for change in file_changes:
-        github_client.push_file_change(
-            fork_slug,
-            staging_repo.feature_branch,
-            change.path,
-            change.content,
-            change.commit_message,
-            settings,
-        )
-        activity.logger.info("Pushed change to %s", change.path)
+        if change.action == "modify" and change.edits:
+            current = github_client.get_file_content(fork_slug, change.path, branch, settings)
+            modified = current
+            for edit in change.edits:
+                if edit.search not in modified:
+                    raise ValueError(
+                        f"Search text not found in {change.path}: {edit.search[:100]!r}"
+                    )
+                modified = modified.replace(edit.search, edit.replace, 1)
+            github_client.push_file_change(
+                fork_slug, branch, change.path, modified, change.commit_message, settings,
+            )
+            activity.logger.info("Applied %d edits to %s", len(change.edits), change.path)
+        else:
+            github_client.push_file_change(
+                fork_slug, branch, change.path, change.content, change.commit_message, settings,
+            )
+            activity.logger.info("Created %s", change.path)
 
 
 @activity.defn
@@ -314,14 +325,33 @@ async def fetch_repo_context(source_org: str, source_repo: str, branch: str) -> 
 
 
 @activity.defn
+async def fetch_files_for_editing(staging_repo: StagingRepo, file_paths: list[str]) -> dict[str, str]:
+    """Fetch current content of files to be modified. Returns {path: content}."""
+    settings = GitHubAgentSettings()
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    branch = staging_repo.feature_branch
+    result: dict[str, str] = {}
+    for path in file_paths:
+        try:
+            content = github_client.get_file_content(fork_slug, path, branch, settings)
+            result[path] = content
+            activity.logger.info("Fetched %s (%d bytes) for editing", path, len(content))
+        except Exception:
+            activity.logger.info("File %s not found on %s — will be created", path, branch)
+    return result
+
+
+@activity.defn
 async def generate_code_for_bundle(
     bundle: RepoPRBundle,
     feature_description: str,
     repo_context: dict,
+    existing_files: dict[str, str] | None = None,
 ) -> list[FileChange]:
     settings = GitHubAgentSettings()
     activity.logger.info(
-        "Generating code for %s (%d steps)", bundle.repo, len(bundle.steps)
+        "Generating code for %s (%d steps, %d existing files for editing)",
+        bundle.repo, len(bundle.steps), len(existing_files or {}),
     )
 
     messages = prompts.render(
@@ -331,6 +361,7 @@ async def generate_code_for_bundle(
         steps=bundle.steps,
         feature_description=feature_description,
         repo_context=repo_context,
+        existing_files=existing_files or {},
     )
 
     class _CodeGenResponse(BaseModel):
