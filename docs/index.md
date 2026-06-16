@@ -49,6 +49,7 @@ instructions.
 
 ### Operations
 
+- [Dashboard](operations/dashboard.md) -- web UI for workflows, health, developer tools, and settings
 - [Monitoring](operations/monitoring.md) -- Temporal UI, worker logs, workflow states
 - [Troubleshooting](operations/troubleshooting.md) -- common errors, restarts, resets
 

@@ -2,20 +2,9 @@
 
 ## Dashboard
 
-The SDLC Dashboard at **http://localhost:8501** provides a unified view of the
-system. It has three pages:
-
-- **Dashboard** (`/`) -- running workflows with status and phase, SDLC lifecycle
-  diagram, expandable PR details with per-repo progress, and a workflow trigger
-  form
-- **Service Status** (`/status`) -- health of infrastructure services (Temporal,
-  RustFS, Ollama, Gitea, Jira Simulator) and agent workers, with auto-refresh
-- **Developer** (`/dev`) -- Monaco editor for prompt templates and S3 artifacts,
-  with the ability to re-run individual workflow steps for prompt iteration
-
-The dashboard polls Temporal every 10 seconds to refresh workflow and health
-data. Clicking a Full SDLC workflow row highlights its current phase in the
-lifecycle diagram and shows associated PRs.
+See [Dashboard](dashboard.md) for the full reference on the web UI at
+**http://localhost:8501** (workflows, service health, developer tools, token
+usage, and settings).
 
 ## Temporal UI
 
@@ -108,5 +97,6 @@ Healthy services show `Up (healthy)`. If a worker is stuck in `Created`, its
 dependency service may be unhealthy. See
 [Troubleshooting](troubleshooting.md) for common fixes.
 
-The dashboard Service Status page (`http://localhost:8501/status`) shows the
-same health information in a web UI, refreshed automatically every 10 seconds.
+The [dashboard](dashboard.md) Service Status page (`http://localhost:8501/status`)
+shows the same health information in a web UI, refreshed automatically every 10
+seconds.
