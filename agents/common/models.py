@@ -219,14 +219,27 @@ class EnhancementDoc(BaseModel):
     title: str
     summary: str
     motivation: str
+    user_stories: list[str] = []
     goals: list[str] = []
     non_goals: list[str] = []
     proposal: str
-    implementation_details: str
+    workflow_description: str = ""
+    api_extensions: str = ""
+    topology_considerations: str = ""
+    implementation_details: str = ""
     risks: list[str] = []
-    graduation_criteria: str = ""
     drawbacks: list[str] = []
     alternatives: list[str] = []
+    open_questions: list[str] = []
+    test_plan: str = ""
+    graduation_criteria: str = ""
+    graduation_dev_preview_to_tech_preview: str = ""
+    graduation_tech_preview_to_ga: str = ""
+    upgrade_downgrade_strategy: str = ""
+    version_skew_strategy: str = ""
+    operational_aspects: str = ""
+    support_procedures: str = ""
+    infrastructure_needed: str = ""
     repos_to_fork: list[str] = []
     artifact_ref: str = ""
 
@@ -345,6 +358,7 @@ class PRMonitorEvent(BaseModel):
     event_type: Literal["label_dropped", "comment", "closed"]
     new_comments: list[str] = []
     labels: list[str] = []
+    retest_requested: bool = False
 
 
 # ── CI validation models ────────────────────────────────────────────────────

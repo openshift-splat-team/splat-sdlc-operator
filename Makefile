@@ -1,5 +1,5 @@
 .PHONY: dev dev-down dev-build dev-logs dev-reload dev-rebuild dev-restart dev-trigger \
-        gitea-token gitea-setup gitea-seed-repos gitea-mirror-repo gitea-reviewer \
+        gitea-token gitea-setup gitea-seed-repos gitea-mirror-repo gitea-reviewer gitea-disable-mirror-actions \
         jira-seed jira-seed-force setup \
         cluster cluster-down cluster-status build load deploy rollout \
         ollama-logs ollama-model \
@@ -101,6 +101,15 @@ gitea-setup:  ## Initialise Gitea: create admin user, API token, and staging org
 	  curl -s -X POST http://localhost:3000/api/v1/orgs \
 	    -u gitea:gitea123 -H "Content-Type: application/json" \
 	    -d "{\"username\":\"staging\",\"visibility\":\"private\"}" > /dev/null 2>&1 || true; \
+	  RUNNER_TOKEN=$$(curl -s "http://localhost:3000/api/v1/admin/runners/registration-token" \
+	    -u gitea:gitea123 \
+	    | sed "s/.*\"token\":\"\([^\"]*\)\".*/\1/" | grep -v "^{"); \
+	  if [ -n "$$RUNNER_TOKEN" ]; then \
+	    printf "%s" "$$RUNNER_TOKEN" > /data/gitea/act-runner-token.txt; \
+	    echo "[gitea-setup] Runner registration token created"; \
+	  else \
+	    echo "[gitea-setup] WARNING: could not generate runner token (needs admin user)"; \
+	  fi; \
 	  echo "[gitea-setup] Done. Run: make gitea-token"'
 
 gitea-reviewer:  ## Create a 'reviewer' user for manual PR reviews (login: reviewer / reviewer123)
@@ -164,6 +173,19 @@ endif
 	  cat "$$TMPFILE"; echo; rm -f "$$TMPFILE"; exit 1; \
 	fi; \
 	rm -f "$$TMPFILE"
+
+gitea-disable-mirror-actions:  ## Disable Gitea Actions on all openshift/* mirror repos (prevents upstream .github/workflows from running)
+	@TOKEN=$$($(COMPOSE) exec gitea cat /data/gitea/gitea-token.txt 2>/dev/null | tr -d '[:space:]'); \
+	if [ -z "$$TOKEN" ]; then echo "No token — run 'make gitea-setup' first."; exit 1; fi; \
+	BASE=http://localhost:3000/api/v1; \
+	REPOS=$$(curl -s "$$BASE/orgs/openshift/repos?limit=50" -H "Authorization: token $$TOKEN" \
+	  | python3 -c "import sys,json; [print(r['full_name']) for r in json.load(sys.stdin) if r.get('mirror')]" 2>/dev/null); \
+	for repo in $$REPOS; do \
+	  curl -s -X PATCH "$$BASE/repos/$$repo" -H "Authorization: token $$TOKEN" \
+	    -H "Content-Type: application/json" -d '{"has_actions":false}' > /dev/null; \
+	  echo "[gitea-disable-mirror-actions] $$repo: actions disabled"; \
+	done; \
+	echo "[gitea-disable-mirror-actions] Done."
 
 # ── Jira simulator seed ───────────────────────────────────────────────────────
 

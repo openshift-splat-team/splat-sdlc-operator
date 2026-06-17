@@ -24,7 +24,7 @@ from agents.common.models import (
     TestResult,
 )
 from agents.common.settings import GitHubAgentSettings
-from agents.github_agent import ci_config, github_client, test_runner
+from agents.github_agent import ci_config, ci_workflow_generator, github_client, test_runner
 
 
 # ── Review activities ─────────────────────────────────────────────────────────
@@ -123,7 +123,8 @@ async def mirror_repository(source_slug: str) -> bool:
     activity.logger.info("Mirroring %s from GitHub into Gitea", source_slug)
     ok = github_client.mirror_repo(source_slug, settings)
     if ok:
-        activity.logger.info("Mirror ready: %s", source_slug)
+        github_client.disable_repo_actions(source_slug, settings)
+        activity.logger.info("Mirror ready: %s (actions disabled)", source_slug)
     else:
         activity.logger.warning("Mirror failed for %s; will be dropped from fork list", source_slug)
     return ok
@@ -214,13 +215,25 @@ async def poll_pr_for_label_drop(staging_repo: StagingRepo) -> PRMonitorEvent:
         comments = github_client.get_pr_comments_since(
             fork_slug, staging_repo.pr_number, 0, settings
         )
+        retest = False
+        filtered: list[str] = []
+        for c in comments:
+            body = c["body"]
+            lines = body.splitlines()
+            clean_lines = [ln for ln in lines if ln.strip() != "/retest"]
+            if len(clean_lines) < len(lines):
+                retest = True
+            cleaned = "\n".join(clean_lines).strip()
+            if cleaned:
+                filtered.append(cleaned)
         return PRMonitorEvent(
             repo_slug=fork_slug,
             pr_number=staging_repo.pr_number,
             pr_url=staging_repo.pr_url,
             event_type="label_dropped",
-            new_comments=[c["body"] for c in comments],
+            new_comments=filtered,
             labels=labels,
+            retest_requested=retest,
         )
 
     return PRMonitorEvent(
@@ -261,7 +274,8 @@ async def process_pr_comments(staging_repo: StagingRepo, comments: list[str]) ->
 
 
 @activity.defn
-async def apply_file_changes(staging_repo: StagingRepo, file_changes: list[FileChange]) -> None:
+async def apply_file_changes(staging_repo: StagingRepo, file_changes: list[FileChange]) -> list[str]:
+    """Apply file changes. Returns list of warnings for skipped edits (empty = all OK)."""
     settings = GitHubAgentSettings()
     fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
     branch = staging_repo.feature_branch
@@ -269,25 +283,37 @@ async def apply_file_changes(staging_repo: StagingRepo, file_changes: list[FileC
         "Applying %d file changes to %s on branch %s",
         len(file_changes), fork_slug, branch,
     )
+    warnings: list[str] = []
     for change in file_changes:
         if change.action == "modify" and change.edits:
-            current = github_client.get_file_content(fork_slug, change.path, branch, settings)
+            try:
+                current = github_client.get_file_content(fork_slug, change.path, branch, settings)
+            except Exception:
+                msg = f"`{change.path}`: file not found on branch `{branch}` — all edits skipped"
+                activity.logger.warning("File not found for modify: %s on %s", change.path, branch)
+                warnings.append(msg)
+                continue
             modified = current
+            applied = 0
             for edit in change.edits:
                 if edit.search not in modified:
-                    raise ValueError(
-                        f"Search text not found in {change.path}: {edit.search[:100]!r}"
-                    )
+                    msg = f"`{change.path}`: search text not found — edit skipped: `{edit.search[:80]}...`"
+                    activity.logger.warning("Skipped edit in %s: search text not found: %s", change.path, edit.search[:100])
+                    warnings.append(msg)
+                    continue
                 modified = modified.replace(edit.search, edit.replace, 1)
-            github_client.push_file_change(
-                fork_slug, branch, change.path, modified, change.commit_message, settings,
-            )
-            activity.logger.info("Applied %d edits to %s", len(change.edits), change.path)
+                applied += 1
+            if applied > 0 and modified != current:
+                github_client.push_file_change(
+                    fork_slug, branch, change.path, modified, change.commit_message, settings,
+                )
+            activity.logger.info("Applied %d/%d edits to %s", applied, len(change.edits), change.path)
         else:
             github_client.push_file_change(
                 fork_slug, branch, change.path, change.content, change.commit_message, settings,
             )
             activity.logger.info("Created %s", change.path)
+    return warnings
 
 
 @activity.defn
@@ -313,7 +339,11 @@ async def fetch_repo_context(source_org: str, source_repo: str, branch: str) -> 
     settings = GitHubAgentSettings()
     source_slug = f"{source_org}/{source_repo}"
     activity.logger.info("Fetching rich repo context for %s from upstream GitHub", source_slug)
-    ctx = github_client.fetch_rich_context(source_slug, settings)
+
+    from agents.common.llm import get_context_budget
+    ctx = github_client.fetch_rich_context(
+        source_slug, settings, context_budget=get_context_budget(settings),
+    )
     activity.logger.info(
         "Rich context for %s: default_branch=%s, agent_instructions=%d bytes, "
         "markdown_docs=%d files, dir_tree=%d bytes, key_files=%d files",
@@ -462,3 +492,99 @@ async def generate_test_fixes(
 
     result = await llm.complete_structured(messages, settings, _FixResponse)
     return result.file_changes
+
+
+# ── Gitea Actions CI activities ──────────────────────────────────────────────
+
+@activity.defn
+async def check_is_gitea() -> bool:
+    settings = GitHubAgentSettings()
+    return github_client.is_gitea(settings)
+
+
+@activity.defn
+async def push_ci_workflow(staging_repo: StagingRepo, tests: list[CITest]) -> None:
+    """Generate a Gitea Actions workflow from CI tests and push it to the feature branch."""
+    settings = GitHubAgentSettings()
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    branch = staging_repo.feature_branch
+
+    stale_gitea = [n for n in github_client.list_directory(fork_slug, branch, ".gitea/workflows", settings) if n != "ci.yml"]
+    upstream_gh = github_client.list_directory(fork_slug, branch, ".github/workflows", settings)
+
+    if stale_gitea or upstream_gh:
+        github_client.disable_repo_actions(fork_slug, settings)
+        for name in stale_gitea:
+            github_client.delete_file(fork_slug, branch, f".gitea/workflows/{name}", settings)
+            activity.logger.info("Removed stale workflow: .gitea/workflows/%s", name)
+        for name in upstream_gh:
+            github_client.delete_file(fork_slug, branch, f".github/workflows/{name}", settings)
+            activity.logger.info("Removed upstream workflow: .github/workflows/%s", name)
+
+    workflow_yaml = ci_workflow_generator.generate_ci_workflow(tests, settings.go_builder_image)
+    github_client.push_file_change(
+        fork_slug, branch, ".gitea/workflows/ci.yml", workflow_yaml,
+        "ci: add Gitea Actions CI workflow", settings,
+    )
+
+    github_client.enable_repo_actions(fork_slug, settings)
+    activity.logger.info("Pushed CI workflow to %s on branch %s", fork_slug, branch)
+
+
+@activity.defn
+async def poll_ci_status(staging_repo: StagingRepo, expected_count: int) -> list[TestResult]:
+    """Poll Gitea commit statuses until all checks complete or timeout."""
+    settings = GitHubAgentSettings()
+    fork_slug = f"{staging_repo.staging_org}/{staging_repo.staging_repo}"
+    branch = staging_repo.feature_branch
+
+    await asyncio.sleep(5)
+
+    sha = github_client.get_branch_head_sha(fork_slug, branch, settings)
+    activity.logger.info("Polling CI status for %s@%s (sha=%s, expecting %d checks)", fork_slug, branch, sha[:8], expected_count)
+
+    ci_prefix = "CI / "
+    max_polls = 40  # 40 * 15s = 10 minutes
+    for i in range(max_polls):
+        activity.heartbeat(f"poll {i+1}/{max_polls}")
+        statuses = github_client.get_commit_statuses(fork_slug, sha, settings)
+
+        latest: dict[str, dict] = {}
+        for s in statuses:
+            ctx = s["context"]
+            if not ctx.startswith(ci_prefix):
+                continue
+            latest[ctx] = s
+
+        if latest:
+            pending = [s for s in latest.values() if s["state"] == "pending"]
+            if not pending:
+                activity.logger.info("All %d CI checks complete for %s", len(latest), sha[:8])
+                return [
+                    TestResult(
+                        test_name=s["context"].removeprefix(ci_prefix),
+                        passed=s["state"] == "success",
+                        exit_code=0 if s["state"] == "success" else 1,
+                        stdout=s.get("description", ""),
+                    )
+                    for s in latest.values()
+                ]
+
+        await asyncio.sleep(15)
+
+    activity.logger.warning("Timeout waiting for CI statuses on %s", sha[:8])
+    latest_statuses = github_client.get_commit_statuses(fork_slug, sha, settings)
+    latest_final: dict[str, dict] = {}
+    for s in latest_statuses:
+        ctx = s["context"]
+        if ctx.startswith(ci_prefix):
+            latest_final[ctx] = s
+    return [
+        TestResult(
+            test_name=s["context"].removeprefix(ci_prefix),
+            passed=s["state"] == "success",
+            exit_code=0 if s["state"] == "success" else 2,
+            stdout=s.get("description", "") + (" [timed out]" if s["state"] == "pending" else ""),
+        )
+        for s in latest_final.values()
+    ]

@@ -129,6 +129,7 @@ services:
       - GITEA__server__HTTP_PORT=3000
       - GITEA__security__INSTALL_LOCK=true
       - GITEA__log__LEVEL=warn
+      - GITEA__actions__ENABLED=true
     ports:
       - "3000:3000"
     volumes:
@@ -139,6 +140,35 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
+
+  # ── Gitea Actions runner ─────────────────────────────────────────────────────
+  act-runner:
+    image: docker.io/gitea/act_runner:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while [ ! -f /data/gitea/act-runner-token.txt ]; do echo "Waiting for runner token..."; sleep 3; done
+        TOKEN=$$(cat /data/gitea/act-runner-token.txt | tr -d '[:space:]')
+        if [ ! -f /root/.runner ]; then
+          act_runner register --no-interactive \
+            --instance http://gitea:3000 \
+            --token "$$TOKEN" \
+            --name local-runner \
+            --labels "ubuntu-latest:docker://golang:1.22"
+        fi
+        printf 'container:\n  network: agent-sdlc-workflow_default\n  docker_host: "-"\n  force_pull: false\n' > /root/.runner_config.yaml
+        act_runner daemon --config /root/.runner_config.yaml
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - gitea-data:/data:z
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock:/var/run/docker.sock
+    security_opt:
+      - label:disable
+    depends_on:
+      gitea:
+        condition: service_healthy
+    restart: on-failure
 
   # ── Jira simulator ──────────────────────────────────────────────────────────
   jira-simulator:
@@ -189,15 +219,6 @@ services:
       - LLM_API_BASE=${LLM_API_BASE:-}
       - GITHUB_BASE_URL=http://gitea:3000/api/v1
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp-credentials.json
-      - CONTAINER_SOCKET=/var/run/podman/podman.sock
-    volumes:
-      - ./agents:/app/agents:ro,z
-      - ./prompts:/app/prompts:ro,z
-      - ./scripts:/app/scripts:ro,z
-      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-credentials.json}:/secrets/gcp-credentials.json:ro,z
-      - ${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock:/var/run/podman/podman.sock
-    security_opt:
-      - label:disable
 
   dep-tree:
     image: localhost/openshift-dep-tree:latest

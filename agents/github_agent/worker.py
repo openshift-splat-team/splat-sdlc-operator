@@ -13,6 +13,7 @@ from agents.common.memory_activities import extract_observations, recall_agent_m
 from agents.common.settings import GitHubAgentSettings
 from agents.github_agent.activities import (
     apply_file_changes,
+    check_is_gitea,
     create_feature_branch,
     create_pr,
     create_staging_pr,
@@ -24,10 +25,12 @@ from agents.github_agent.activities import (
     generate_code_for_bundle,
     generate_test_fixes,
     mirror_repository,
+    poll_ci_status,
     poll_pr_for_label_drop,
     post_comments,
     post_pr_comment,
     process_pr_comments,
+    push_ci_workflow,
     remove_agent_hold,
     reset_agent_hold_label,
     run_repo_tests,
@@ -87,6 +90,7 @@ async def main() -> None:
             fetch_files_for_editing, fetch_repo_context, generate_code_for_bundle, update_pr_description,
             remove_agent_hold, store_implementation_result,
             fetch_repo_ci_config, run_repo_tests, generate_test_fixes,
+            check_is_gitea, push_ci_workflow, poll_ci_status,
             save_memory_entry, recall_agent_memories, extract_observations,
         ],
     ):

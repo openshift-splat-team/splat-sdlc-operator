@@ -24,6 +24,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from agents.github_agent.activities import (
         apply_file_changes,
+        check_is_gitea,
         create_feature_branch,
         create_pr,
         create_staging_pr,
@@ -35,10 +36,12 @@ with workflow.unsafe.imports_passed_through():
         generate_code_for_bundle,
         generate_test_fixes,
         mirror_repository,
+        poll_ci_status,
         poll_pr_for_label_drop,
         post_comments,
         post_pr_comment,
         process_pr_comments,
+        push_ci_workflow,
         remove_agent_hold,
         reset_agent_hold_label,
         run_repo_tests,
@@ -263,47 +266,134 @@ class MonitorPRWorkflow:
                 workflow.logger.info("PR %s#%d closed; monitor exiting", source_slug, staging_repo.pr_number)
                 return
 
-            if event.event_type == "label_dropped" and event.new_comments:
-                workflow.logger.info(
-                    "agent-hold dropped on %s#%d; processing %d comments",
-                    source_slug, staging_repo.pr_number, len(event.new_comments),
-                )
-                result = await workflow.execute_activity(
-                    process_pr_comments,
-                    args=[staging_repo, event.new_comments],
-                    start_to_close_timeout=timedelta(minutes=10),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=5),
-                        backoff_coefficient=2.0,
-                        maximum_attempts=5,
-                        non_retryable_error_types=["ValueError"],
-                    ),
-                )
-                workflow.logger.info(
-                    "Comment processing complete: %d file changes", len(result.file_changes)
-                )
+            if event.event_type == "label_dropped":
+                retest_passed = None
 
-                if result.file_changes:
+                if event.new_comments:
+                    workflow.logger.info(
+                        "agent-hold dropped on %s#%d; processing %d comments",
+                        source_slug, staging_repo.pr_number, len(event.new_comments),
+                    )
+                    result = await workflow.execute_activity(
+                        process_pr_comments,
+                        args=[staging_repo, event.new_comments],
+                        start_to_close_timeout=timedelta(minutes=10),
+                        retry_policy=RetryPolicy(
+                            initial_interval=timedelta(seconds=5),
+                            backoff_coefficient=2.0,
+                            maximum_attempts=5,
+                            non_retryable_error_types=["ValueError"],
+                        ),
+                    )
+                    workflow.logger.info(
+                        "Comment processing complete: %d file changes", len(result.file_changes)
+                    )
+
+                    if result.file_changes:
+                        edit_warns: list[str] = await workflow.execute_activity(
+                            apply_file_changes,
+                            args=[staging_repo, result.file_changes],
+                            start_to_close_timeout=timedelta(minutes=5),
+                            retry_policy=_STANDARD_RETRY,
+                        )
+                        if edit_warns:
+                            result.response_body += "\n\n---\n**Warning:** some edits were skipped:\n" + "\n".join(f"- {w}" for w in edit_warns)
+
                     await workflow.execute_activity(
-                        apply_file_changes,
-                        args=[staging_repo, result.file_changes],
-                        start_to_close_timeout=timedelta(minutes=5),
+                        post_pr_comment,
+                        args=[staging_repo, result.response_body],
+                        start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=_STANDARD_RETRY,
                     )
 
-                await workflow.execute_activity(
-                    post_pr_comment,
-                    args=[staging_repo, result.response_body],
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=_STANDARD_RETRY,
-                )
+                if event.retest_requested:
+                    workflow.logger.info("Retest requested on %s#%d", source_slug, staging_repo.pr_number)
+                    await workflow.execute_activity(
+                        post_pr_comment,
+                        args=[staging_repo, "Re-running CI validation as requested by `/retest`."],
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_STANDARD_RETRY,
+                    )
 
-                await workflow.execute_activity(
-                    reset_agent_hold_label,
-                    staging_repo,
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=_STANDARD_RETRY,
-                )
+                    default_branch = "master"
+                    ci_tests: list[CITest] = await workflow.execute_activity(
+                        fetch_repo_ci_config,
+                        args=[staging_repo.source_org, staging_repo.source_repo, default_branch],
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_STANDARD_RETRY,
+                    )
+
+                    if ci_tests:
+                        use_gitea = await workflow.execute_activity(
+                            check_is_gitea,
+                            start_to_close_timeout=timedelta(seconds=5),
+                            retry_policy=_STANDARD_RETRY,
+                        )
+                        if use_gitea:
+                            await workflow.execute_activity(
+                                push_ci_workflow,
+                                args=[staging_repo, ci_tests],
+                                start_to_close_timeout=timedelta(seconds=60),
+                                retry_policy=_STANDARD_RETRY,
+                            )
+                            test_results: list[TestResult] = await workflow.execute_activity(
+                                poll_ci_status,
+                                args=[staging_repo, len(ci_tests)],
+                                start_to_close_timeout=timedelta(minutes=15),
+                                heartbeat_timeout=timedelta(minutes=2),
+                                retry_policy=_TEST_RETRY,
+                            )
+                        else:
+                            test_results = await workflow.execute_activity(
+                                run_repo_tests,
+                                args=[staging_repo, ci_tests],
+                                start_to_close_timeout=timedelta(minutes=30),
+                                retry_policy=_TEST_RETRY,
+                            )
+
+                        failures = [r for r in test_results if not r.passed]
+                        retest_passed = len(failures) == 0
+
+                        if retest_passed:
+                            await workflow.execute_activity(
+                                post_pr_comment,
+                                args=[staging_repo, f"CI validation passed ({len(test_results)} test(s))."],
+                                start_to_close_timeout=timedelta(seconds=30),
+                                retry_policy=_STANDARD_RETRY,
+                            )
+                        else:
+                            summary = f"## CI Retest Failed\n\n**{len(failures)}/{len(test_results)} test(s) failed:**\n\n"
+                            for f in failures:
+                                summary += f"- **{f.test_name}** (exit {f.exit_code}): {f.stdout[:200]}\n"
+                            await workflow.execute_activity(
+                                post_pr_comment,
+                                args=[staging_repo, summary],
+                                start_to_close_timeout=timedelta(seconds=30),
+                                retry_policy=_STANDARD_RETRY,
+                            )
+                    else:
+                        retest_passed = True
+                        await workflow.execute_activity(
+                            post_pr_comment,
+                            args=[staging_repo, "No CI tests configured; skipping validation."],
+                            start_to_close_timeout=timedelta(seconds=30),
+                            retry_policy=_STANDARD_RETRY,
+                        )
+
+                if retest_passed is True:
+                    await workflow.execute_activity(
+                        remove_agent_hold,
+                        staging_repo,
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_STANDARD_RETRY,
+                    )
+                else:
+                    await workflow.execute_activity(
+                        reset_agent_hold_label,
+                        staging_repo,
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=_STANDARD_RETRY,
+                    )
 
             await asyncio.sleep(_POLL_INTERVAL.total_seconds())
 
@@ -368,8 +458,9 @@ _TEST_RETRY = RetryPolicy(
 class ValidateCodeWorkflow:
     """Runs CI checks against the code on the feature branch.
 
-    Fetches the ci-operator config from openshift/release, runs lightweight
-    tests in containers, and auto-fixes failures up to max_attempts times.
+    On Gitea: pushes a .gitea/workflows/ci.yml and polls commit statuses.
+    On GitHub: runs tests in containers via podman (fallback).
+    Auto-fixes failures up to max_attempts times.
     """
 
     @workflow.run
@@ -389,7 +480,6 @@ class ValidateCodeWorkflow:
         default_branch = repo_context.get("default_branch", "master")
         workflow.logger.info("ValidateCodeWorkflow: validating %s", source_slug)
 
-        # Fetch CI config from openshift/release
         ci_tests: list[CITest] = await workflow.execute_activity(
             fetch_repo_ci_config,
             args=[staging_repo.source_org, staging_repo.source_repo, default_branch],
@@ -403,16 +493,38 @@ class ValidateCodeWorkflow:
                 repo=bundle.repo, all_passed=True, results=[], attempt=0, max_attempts=max_attempts,
             )
 
-        workflow.logger.info("ValidateCodeWorkflow: %d CI tests to run for %s", len(ci_tests), source_slug)
+        use_gitea = await workflow.execute_activity(
+            check_is_gitea,
+            start_to_close_timeout=timedelta(seconds=5),
+            retry_policy=_STANDARD_RETRY,
+        )
+
+        if use_gitea:
+            await workflow.execute_activity(
+                push_ci_workflow,
+                args=[staging_repo, ci_tests],
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=_STANDARD_RETRY,
+            )
+
+        workflow.logger.info("ValidateCodeWorkflow: %d CI tests to run for %s (gitea_actions=%s)", len(ci_tests), source_slug, use_gitea)
 
         for attempt in range(1, max_attempts + 1):
-            # Run tests
-            test_results: list[TestResult] = await workflow.execute_activity(
-                run_repo_tests,
-                args=[staging_repo, ci_tests],
-                start_to_close_timeout=timedelta(minutes=30),
-                retry_policy=_TEST_RETRY,
-            )
+            if use_gitea:
+                test_results: list[TestResult] = await workflow.execute_activity(
+                    poll_ci_status,
+                    args=[staging_repo, len(ci_tests)],
+                    start_to_close_timeout=timedelta(minutes=15),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=_TEST_RETRY,
+                )
+            else:
+                test_results = await workflow.execute_activity(
+                    run_repo_tests,
+                    args=[staging_repo, ci_tests],
+                    start_to_close_timeout=timedelta(minutes=30),
+                    retry_policy=_TEST_RETRY,
+                )
 
             failures = [r for r in test_results if not r.passed]
             if not failures:
@@ -433,7 +545,6 @@ class ValidateCodeWorkflow:
             if attempt >= max_attempts:
                 break
 
-            # Auto-fix: ask LLM to fix failures
             fix_changes = await workflow.execute_activity(
                 generate_test_fixes,
                 args=[staging_repo, failures, bundle, feature_description, repo_context, attempt, max_attempts],
@@ -442,17 +553,18 @@ class ValidateCodeWorkflow:
             )
 
             if fix_changes:
-                await workflow.execute_activity(
+                fix_warns: list[str] = await workflow.execute_activity(
                     apply_file_changes,
                     args=[staging_repo, fix_changes],
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=_STANDARD_RETRY,
                 )
+                if fix_warns:
+                    workflow.logger.warning("Test fix edits skipped: %s", fix_warns)
             else:
                 workflow.logger.warning("LLM returned no fixes; stopping retry loop")
                 break
 
-        # Final failure — post comment with details
         failure_summary = "## CI Validation Failed\n\n"
         failure_summary += f"**{len(failures)} test(s) failed** after {attempt} auto-fix attempt(s):\n\n"
         for f in failures:
@@ -532,12 +644,24 @@ class CodeGenerationWorkflow:
         )
 
         if file_changes:
-            await workflow.execute_activity(
+            edit_warnings: list[str] = await workflow.execute_activity(
                 apply_file_changes,
                 args=[staging_repo, file_changes],
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=_STANDARD_RETRY,
             )
+            if edit_warnings:
+                warning_body = (
+                    "**Code generation warning:** some edits could not be applied.\n\n"
+                    + "\n".join(f"- {w}" for w in edit_warnings)
+                    + "\n\nThese edits were skipped. Manual intervention may be needed."
+                )
+                await workflow.execute_activity(
+                    post_pr_comment,
+                    args=[staging_repo, warning_body],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=_STANDARD_RETRY,
+                )
 
         result = CodeGenerationResult(
             repo=bundle.repo,

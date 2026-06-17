@@ -313,6 +313,30 @@ def push_file_change(
     return resp.json()["commit"]["sha"]
 
 
+def delete_file(repo_slug: str, branch: str, path: str, settings: GitHubAgentSettings) -> None:
+    """Delete a file from a branch."""
+    gh = _connect(settings)
+    repo = gh.get_repo(repo_slug)
+    try:
+        existing = repo.get_contents(path, ref=branch)
+        repo.delete_file(path, f"ci: remove stale workflow {path}", existing.sha, branch=branch)
+    except GithubException:
+        pass
+
+
+def list_directory(repo_slug: str, branch: str, path: str, settings: GitHubAgentSettings) -> list[str]:
+    """List file names in a directory on a branch. Returns empty list if dir doesn't exist."""
+    gh = _connect(settings)
+    repo = gh.get_repo(repo_slug)
+    try:
+        contents = repo.get_contents(path, ref=branch)
+        if isinstance(contents, list):
+            return [c.name for c in contents]
+        return [contents.name]
+    except GithubException:
+        return []
+
+
 def add_label(repo_slug: str, pr_number: int, label: str, settings: GitHubAgentSettings) -> None:
     owner, name = repo_slug.split("/", 1)
     base = settings.github_base_url.rstrip("/")
@@ -431,7 +455,7 @@ def get_repo_context(source_slug: str, branch: str, settings: GitHubAgentSetting
 
 _GITHUB_API = "https://api.github.com"
 _GITHUB_RAW = "https://raw.githubusercontent.com"
-_CONTEXT_BUDGET = 29_000  # ~7,250 tokens (leaves headroom for truncation markers)
+_DEFAULT_CONTEXT_BUDGET = 29_000  # ~7,250 tokens (leaves headroom for truncation markers)
 
 _AGENT_FILES = {"CLAUDE.md", "AGENTS.md"}
 _KEY_SOURCE_NAMES = {"types.go", "doc.go", "register.go"}
@@ -481,7 +505,11 @@ def _build_dir_tree(tree_entries: list[dict], max_depth: int = 3, max_bytes: int
     return "\n".join(lines)
 
 
-def fetch_rich_context(source_slug: str, settings: GitHubAgentSettings) -> dict:
+def fetch_rich_context(
+    source_slug: str,
+    settings: GitHubAgentSettings,
+    context_budget: int | None = None,
+) -> dict:
     """Fetch rich repo context from upstream GitHub for LLM code generation.
 
     Caches the result in S3 keyed by repo slug. Uses the upstream repo's
@@ -491,6 +519,8 @@ def fetch_rich_context(source_slug: str, settings: GitHubAgentSettings) -> dict:
     Returns dict with: default_branch, agent_instructions, markdown_docs,
     dir_tree, go_mod, key_files.
     """
+    if context_budget is None:
+        context_budget = _DEFAULT_CONTEXT_BUDGET
     from agents.common import storage  # noqa: PLC0415
 
     headers = _gh_headers(settings)
@@ -546,7 +576,7 @@ def fetch_rich_context(source_slug: str, settings: GitHubAgentSettings) -> dict:
     # Legacy field for backward compat
     result["dir_listing"] = _build_dir_tree(tree_entries, max_depth=1, max_bytes=2000)
 
-    budget = _CONTEXT_BUDGET - len(result["dir_tree"])
+    budget = context_budget - len(result["dir_tree"])
 
     # 4. Classify files of interest
     agent_paths: list[str] = []
@@ -679,6 +709,53 @@ def post_issue_comment(repo_slug: str, pr_number: int, body: str, settings: GitH
     )
     if resp.status_code not in (200, 201):
         raise RuntimeError(f"Failed to post comment on {repo_slug}#{pr_number}: {resp.status_code} {resp.text[:200]}")
+
+
+def get_branch_head_sha(repo_slug: str, branch: str, settings: GitHubAgentSettings) -> str:
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}"}
+    resp = requests.get(f"{base}/repos/{owner}/{name}/branches/{branch}", headers=headers, timeout=15)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Failed to get branch {branch} on {repo_slug}: {resp.status_code}")
+    return resp.json()["commit"]["id"]
+
+
+def get_commit_statuses(repo_slug: str, sha: str, settings: GitHubAgentSettings) -> list[dict]:
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}"}
+    resp = requests.get(f"{base}/repos/{owner}/{name}/statuses/{sha}", headers=headers, timeout=15)
+    if resp.status_code != 200:
+        return []
+    return [
+        {"context": s.get("context", ""), "state": s.get("status", s.get("state", "")), "description": s.get("description", "")}
+        for s in resp.json()
+    ]
+
+
+def enable_repo_actions(repo_slug: str, settings: GitHubAgentSettings) -> None:
+    _set_repo_actions(repo_slug, True, settings)
+
+
+def disable_repo_actions(repo_slug: str, settings: GitHubAgentSettings) -> None:
+    _set_repo_actions(repo_slug, False, settings)
+
+
+def _set_repo_actions(repo_slug: str, enabled: bool, settings: GitHubAgentSettings) -> None:
+    owner, name = repo_slug.split("/", 1)
+    base = settings.github_base_url.rstrip("/")
+    headers = {"Authorization": f"token {settings.github_token}", "Content-Type": "application/json"}
+    resp = requests.patch(
+        f"{base}/repos/{owner}/{name}",
+        headers=headers,
+        json={"has_actions": enabled},
+        timeout=15,
+    )
+    if resp.status_code in (200, 201):
+        logger.info("Actions %s on %s", "enabled" if enabled else "disabled", repo_slug)
+    else:
+        logger.warning("Failed to set actions=%s on %s: %d", enabled, repo_slug, resp.status_code)
 
 
 def get_pr_state(repo_slug: str, pr_number: int, settings: GitHubAgentSettings) -> dict:
