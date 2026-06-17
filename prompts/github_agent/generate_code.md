@@ -134,6 +134,11 @@ For files that already exist (their current content is shown in "Existing File C
 5. Group logically related changes into one `FileChange`; use separate entries for distinct concerns.
 6. For new files, use the correct package declaration based on the target directory.
 
+**OpenShift API and operator conventions:**
+- New API fields must be optional with zero-value defaults. Use `// +optional` comment and `omitempty` JSON tag. Never remove or rename existing fields.
+- When adding a new CRD type, include `+genclient` and `+k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object` markers. Register the type in the package's `register.go`.
+- When implementing ClusterOperator status: report Available, Progressing, Degraded, and Upgradeable conditions with reason codes. Available=True means serving, Progressing=True means reconciling, Degraded=True means impaired. Always set lastTransitionTime. Use ObservedGeneration to track which spec version was reconciled.
+
 **Before returning, self-check:** review each edit and confirm its `search` text matches the file content shown above exactly. Remove any change that does not implement part of a listed step.
 
 Return a JSON object with this exact schema:

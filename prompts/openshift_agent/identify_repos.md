@@ -24,6 +24,27 @@ repo is actually affected.
 
 {% endfor %}
 
+## Core Platform Reference
+
+Key OpenShift repositories and their roles:
+- **openshift/api** — all OpenShift API type definitions (Tier 0). Any new CRD or type change starts here.
+- **cluster-version-operator** — upgrade orchestration (CVO). Changes here affect every cluster upgrade.
+- **machine-config-operator** — node configuration via MachineConfig. High-risk: changes require reboot tests.
+- **machine-api-operator** — node lifecycle (Machine, MachineSet).
+- **cluster-kube-apiserver-operator** — manages kube-apiserver. Changes need serial upgrade testing.
+- **cluster-etcd-operator** — manages etcd cluster. CVO upgrades etcd first.
+- **cluster-network-operator** — SDN/OVN orchestration.
+- **installer** — cluster provisioning across platforms (AWS, GCP, Azure, vSphere, etc.).
+
+Naming conventions: `cluster-<component>-operator` is historical naming, `<component>-operator` is standard. The `cluster-` prefix does not indicate importance.
+
+Change type guidance:
+- `new_types` — requires openshift/api change (Tier 0)
+- `vendor_bump` — needed by downstream consumers after openshift/api changes
+- `implementation` — operator logic changes (Tier 1+)
+- `ci_config` — openshift/release job additions
+- `tests` — test framework changes (openshift/openshift-tests)
+
 IMPORTANT: Only return repositories from the candidate list above.
 Do not invent, infer, or hallucinate repository names that do not appear in the list.
 If you are unsure whether a repo is affected, omit it.

@@ -32,6 +32,13 @@ Rules you must follow:
 - Only include repos from the affected repositories list above in the pr_sequence.
 - Do NOT propose refactoring existing code. Steps must only add or extend — never restructure, rename, or reorganize code that already works.
 
+OpenShift design principles to apply:
+- API-first: new types must land in openshift/api before any operator consumes them. API changes go in Tier 0.
+- Upgrade safety: all components must support N→N+1 version skew. CVO upgrades in order: etcd → kube-apiserver → kube-controller-manager → operators. Steps that touch CVO-managed manifests require upgrade testing.
+- Backward compatibility: new API fields must be optional with zero-value defaults. Old clients must still work with new types.
+- Operator status conditions: any step that adds or modifies a ClusterOperator must report Available, Progressing, Degraded, and Upgradeable conditions correctly.
+- Topology impact: note if a step affects Single Node OpenShift (SNO — no worker nodes, all roles on one node), MicroShift (minimal distro, no CVO or ClusterOperator), or HyperShift (hosted control plane, control/data plane version may differ). If a step does not apply to a topology, say so.
+
 Respond ONLY with a valid JSON object. Do not include markdown fences or any
 other text outside the JSON.
 

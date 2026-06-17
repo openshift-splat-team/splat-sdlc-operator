@@ -33,6 +33,10 @@ Key CI facts:
 - API changes require conformance tests in openshift/openshift-tests
 - New operators must have an e2e job targeting their specific operator namespace
 - Periodic jobs (nightly) catch upgrade regressions; presubmit jobs run on every PR
+- Upgrade testing: changes to ClusterOperator status reporting or CVO-managed manifests require upgrade-from-previous tests. CVO upgrades in order (etcd → kube-apiserver → kube-controller-manager → operators), so etcd/apiserver changes need serial upgrade testing.
+- Status condition validation: operators must report Available=True, Progressing=False, Degraded=False in steady state. CI should verify these post-deploy.
+- Version skew: components must handle N→N+1 skew. API changes need N-1 compatibility tests to ensure old clients work with new types.
+- Topology-specific tests: SNO changes need single-node e2e jobs, HyperShift changes need hypershift-specific jobs (e.g. e2e-hypershift).
 
 Respond ONLY with a valid JSON object.
 
