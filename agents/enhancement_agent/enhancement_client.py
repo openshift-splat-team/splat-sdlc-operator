@@ -19,20 +19,49 @@ def _enhancement_path(feature_slug: str) -> str:
     return f"enhancements/{feature_slug}/README.md"
 
 
+def _bullet_list(items: list[str]) -> str:
+    return "\n".join(f"- {item}" for item in items) if items else "N/A"
+
+
 def _render_doc_markdown(doc: EnhancementDoc) -> str:
+    frontmatter = (
+        "---\n"
+        f"title: {doc.title}\n"
+        "authors:\n  - TBD\n"
+        "reviewers:\n  - TBD\n"
+        "approvers:\n  - TBD\n"
+        "api-approvers:\n  - TBD\n"
+        "creation-date: TBD\n"
+        "last-updated: TBD\n"
+        "status: provisional\n"
+        "---\n"
+    )
     sections = [
+        frontmatter,
         f"# {doc.title}",
-        "",
         f"## Summary\n\n{doc.summary}",
         f"## Motivation\n\n{doc.motivation}",
-        "## Goals\n\n" + "\n".join(f"- {g}" for g in doc.goals),
-        "## Non-Goals\n\n" + "\n".join(f"- {ng}" for ng in doc.non_goals),
+        "### User Stories\n\n" + _bullet_list(doc.user_stories),
+        "### Goals\n\n" + _bullet_list(doc.goals),
+        "### Non-Goals\n\n" + _bullet_list(doc.non_goals),
         f"## Proposal\n\n{doc.proposal}",
-        f"## Implementation Details\n\n{doc.implementation_details}",
-        f"## Graduation Criteria\n\n{doc.graduation_criteria}",
-        "## Risks and Mitigations\n\n" + "\n".join(f"- {r}" for r in doc.risks),
-        "## Drawbacks\n\n" + "\n".join(f"- {d}" for d in doc.drawbacks),
-        "## Alternatives\n\n" + "\n".join(f"- {a}" for a in doc.alternatives),
+        f"### Workflow Description\n\n{doc.workflow_description or 'N/A'}",
+        f"### API Extensions\n\n{doc.api_extensions or 'N/A'}",
+        f"### Topology Considerations\n\n{doc.topology_considerations or 'N/A'}",
+        f"### Implementation Details/Notes/Constraints\n\n{doc.implementation_details or 'N/A'}",
+        "### Risks and Mitigations\n\n" + _bullet_list(doc.risks),
+        "### Drawbacks\n\n" + _bullet_list(doc.drawbacks),
+        "## Alternatives (Not Implemented)\n\n" + _bullet_list(doc.alternatives),
+        "## Open Questions [optional]\n\n" + _bullet_list(doc.open_questions),
+        f"## Test Plan\n\n{doc.test_plan or 'N/A'}",
+        f"## Graduation Criteria\n\n{doc.graduation_criteria or 'N/A'}",
+        f"### Dev Preview -> Tech Preview\n\n{doc.graduation_dev_preview_to_tech_preview or 'N/A'}",
+        f"### Tech Preview -> GA\n\n{doc.graduation_tech_preview_to_ga or 'N/A'}",
+        f"## Upgrade / Downgrade Strategy\n\n{doc.upgrade_downgrade_strategy or 'N/A'}",
+        f"## Version Skew Strategy\n\n{doc.version_skew_strategy or 'N/A'}",
+        f"## Operational Aspects of API Extensions\n\n{doc.operational_aspects or 'N/A'}",
+        f"## Support Procedures\n\n{doc.support_procedures or 'N/A'}",
+        f"## Infrastructure Needed [optional]\n\n{doc.infrastructure_needed or 'N/A'}",
         "## Repositories to Fork\n\n" + (
             "\n".join(f"- `{r}`" for r in doc.repos_to_fork)
             if doc.repos_to_fork
