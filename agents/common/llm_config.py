@@ -7,6 +7,7 @@ Falls back to BaseAgentSettings env-var values when no override is configured.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import yaml
 
@@ -18,10 +19,26 @@ class LLMOverride:
     api_base: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
+    max_tokens: int | None = None
+    max_tokens_structured: int | None = None
+    context_budget: int | None = None
 
 
 _default: LLMOverride = LLMOverride()
 _overrides: dict[str, LLMOverride] = {}
+
+
+def _parse_override(cfg: dict) -> LLMOverride:
+    return LLMOverride(
+        model=cfg.get("model") or None,
+        api_key=cfg.get("api_key") or None,
+        api_base=cfg.get("api_base") or None,
+        vertex_project=cfg.get("vertex_project") or None,
+        vertex_location=cfg.get("vertex_location") or None,
+        max_tokens=cfg.get("max_tokens"),
+        max_tokens_structured=cfg.get("max_tokens_structured"),
+        context_budget=cfg.get("context_budget"),
+    )
 
 
 def load(path: str) -> None:
@@ -31,33 +48,31 @@ def load(path: str) -> None:
         data = yaml.safe_load(f) or {}
 
     if d := data.get("default"):
-        _default = LLMOverride(
-            model=d.get("model") or None,
-            api_key=d.get("api_key") or None,
-            api_base=d.get("api_base") or None,
-            vertex_project=d.get("vertex_project") or None,
-            vertex_location=d.get("vertex_location") or None,
-        )
+        _default = _parse_override(d)
 
     _overrides = {
-        task_queue: LLMOverride(
-            model=cfg.get("model") or None,
-            api_key=cfg.get("api_key") or None,
-            api_base=cfg.get("api_base") or None,
-            vertex_project=cfg.get("vertex_project") or None,
-            vertex_location=cfg.get("vertex_location") or None,
-        )
+        task_queue: _parse_override(cfg)
         for task_queue, cfg in (data.get("agents") or {}).items()
     }
 
 
+def _merge(agent_val: Any, default_val: Any) -> Any:
+    return agent_val if agent_val is not None else default_val
+
+
 def get_override(task_queue: str) -> LLMOverride:
     """Return merged override for task_queue; fields are None when not configured."""
-    agent_cfg = _overrides.get(task_queue)
+    a = _overrides.get(task_queue)
+    d = _default
+    if not a:
+        return d
     return LLMOverride(
-        model=(agent_cfg.model if agent_cfg and agent_cfg.model else _default.model),
-        api_key=(agent_cfg.api_key if agent_cfg and agent_cfg.api_key else _default.api_key),
-        api_base=(agent_cfg.api_base if agent_cfg and agent_cfg.api_base else _default.api_base),
-        vertex_project=(agent_cfg.vertex_project if agent_cfg and agent_cfg.vertex_project else _default.vertex_project),
-        vertex_location=(agent_cfg.vertex_location if agent_cfg and agent_cfg.vertex_location else _default.vertex_location),
+        model=_merge(a.model, d.model),
+        api_key=_merge(a.api_key, d.api_key),
+        api_base=_merge(a.api_base, d.api_base),
+        vertex_project=_merge(a.vertex_project, d.vertex_project),
+        vertex_location=_merge(a.vertex_location, d.vertex_location),
+        max_tokens=_merge(a.max_tokens, d.max_tokens),
+        max_tokens_structured=_merge(a.max_tokens_structured, d.max_tokens_structured),
+        context_budget=_merge(a.context_budget, d.context_budget),
     )

@@ -61,12 +61,25 @@ def _get_activity_context() -> tuple[str | None, str | None]:
         return None, None
 
 
+_DEFAULT_MAX_TOKENS = 4096
+_DEFAULT_MAX_TOKENS_STRUCTURED = 32768
+_DEFAULT_CONTEXT_BUDGET = 29_000
+
+
+def get_context_budget(settings: BaseAgentSettings) -> int:
+    """Return the configured repo-context budget (bytes) for this agent's model."""
+    from agents.common.llm_config import get_override
+
+    override = get_override(settings.temporal_task_queue)
+    return override.context_budget or _DEFAULT_CONTEXT_BUDGET
+
+
 async def complete(
     messages: list[dict[str, str]],
     settings: BaseAgentSettings,
     *,
     temperature: float = 0.2,
-    max_tokens: int = 4096,
+    max_tokens: int | None = None,
     **kwargs: Any,
 ) -> str:
     from agents.common.llm_config import get_override
@@ -78,6 +91,9 @@ async def complete(
 
     vertex_project = override.vertex_project or settings.vertex_project
     vertex_location = override.vertex_location or settings.vertex_location
+
+    if max_tokens is None:
+        max_tokens = override.max_tokens or _DEFAULT_MAX_TOKENS
 
     extra: dict[str, Any] = {}
     if api_key:
@@ -120,8 +136,14 @@ async def complete_structured(
     response_model: type[T],
     *,
     temperature: float = 0.2,
-    max_tokens: int = 32768,
+    max_tokens: int | None = None,
 ) -> T:
+    if max_tokens is None:
+        from agents.common.llm_config import get_override
+
+        override = get_override(settings.temporal_task_queue)
+        max_tokens = override.max_tokens_structured or _DEFAULT_MAX_TOKENS_STRUCTURED
+
     schema = response_model.model_json_schema()
     system_instruction = (
         "Respond ONLY with a valid JSON object matching this schema. "
