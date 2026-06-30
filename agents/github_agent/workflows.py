@@ -32,6 +32,7 @@ with workflow.unsafe.imports_passed_through():
         fetch_pr,
         fetch_repo_ci_config,
         fetch_repo_context,
+        fetch_type_index,
         fork_repository,
         generate_code_for_bundle,
         generate_test_fixes,
@@ -616,6 +617,20 @@ class CodeGenerationWorkflow:
             start_to_close_timeout=timedelta(seconds=120),
             retry_policy=_STANDARD_RETRY,
         )
+
+        target_dirs = []
+        for s in bundle.steps:
+            if s.target_directories:
+                target_dirs.extend(s.target_directories)
+        target_dirs = list(dict.fromkeys(target_dirs))
+        if target_dirs:
+            type_index = await workflow.execute_activity(
+                fetch_type_index,
+                args=[staging_repo.source_org, staging_repo.source_repo, target_dirs],
+                start_to_close_timeout=timedelta(seconds=120),
+                retry_policy=_STANDARD_RETRY,
+            )
+            repo_context["type_index"] = type_index
 
         files_to_modify = []
         for s in bundle.steps:

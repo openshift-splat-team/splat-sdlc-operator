@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 
 import requests
 
@@ -671,6 +672,63 @@ def fetch_rich_context(
             pass  # cache write failure is non-fatal
 
     return result
+
+
+_TYPE_DECL_RE = re.compile(r"^\s*type\s+(\w+)\s+", re.MULTILINE)
+
+
+def fetch_package_type_index(
+    source_slug: str,
+    directories: list[str],
+    settings: GitHubAgentSettings,
+) -> dict[str, list[dict]]:
+    """Scan .go files in *directories* and return existing type declarations.
+
+    Returns ``{directory: [{name, file, line}, ...]}``.  Used to prevent the
+    code-generation LLM from redeclaring types that already exist.
+    """
+    headers = _gh_headers(settings)
+
+    resp = requests.get(
+        f"{_GITHUB_API}/repos/{source_slug}/git/trees/master?recursive=1",
+        headers=headers,
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        return {}
+
+    entries = resp.json().get("tree", [])
+
+    dir_set = {d.rstrip("/") for d in directories}
+    go_files: dict[str, list[str]] = {}
+    for entry in entries:
+        if entry["type"] != "blob":
+            continue
+        path = entry["path"]
+        name = path.rsplit("/", 1)[-1]
+        if not name.endswith(".go"):
+            continue
+        if name.endswith("_test.go") or name.startswith("zz_generated"):
+            continue
+        parent = path.rsplit("/", 1)[0] if "/" in path else "."
+        if parent in dir_set:
+            go_files.setdefault(parent, []).append(path)
+
+    index: dict[str, list[dict]] = {}
+    for directory in sorted(go_files):
+        decls: list[dict] = []
+        for path in sorted(go_files[directory]):
+            content = _fetch_raw(source_slug, "master", path, settings)
+            if not content:
+                continue
+            filename = path.rsplit("/", 1)[-1]
+            for i, line in enumerate(content.splitlines(), 1):
+                m = _TYPE_DECL_RE.match(line)
+                if m:
+                    decls.append({"name": m.group(1), "file": filename, "line": i})
+        if decls:
+            index[directory] = decls
+    return index
 
 
 def get_pr_body(repo_slug: str, pr_number: int, settings: GitHubAgentSettings) -> str:

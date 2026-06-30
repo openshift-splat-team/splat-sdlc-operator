@@ -99,6 +99,19 @@ These are the current contents of files you will be modifying. Use these to writ
 {% endfor %}
 {% endif %}
 
+{% if repo_context.type_index %}
+### Existing Type Declarations
+
+These types already exist in the target packages. Do NOT redeclare any of them. If you need to use or extend one of these types, modify the file where it is already declared instead of creating a new file with the same type name.
+
+{% for dir, decls in repo_context.type_index.items() %}
+#### {{ dir }}
+{% for d in decls %}
+- `{{ d.name }}` ({{ d.file }}:{{ d.line }})
+{% endfor %}
+{% endfor %}
+{% endif %}
+
 {% if repo_context.readme %}
 ### README excerpt
 {{ repo_context.readme }}
