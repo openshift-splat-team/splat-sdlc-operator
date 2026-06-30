@@ -372,6 +372,22 @@ async def fetch_files_for_editing(staging_repo: StagingRepo, file_paths: list[st
 
 
 @activity.defn
+async def fetch_type_index(
+    source_org: str,
+    source_repo: str,
+    directories: list[str],
+) -> dict[str, list[dict]]:
+    """Fetch existing Go type declarations in target directories."""
+    settings = GitHubAgentSettings()
+    source_slug = f"{source_org}/{source_repo}"
+    activity.logger.info("Fetching type index for %s dirs=%s", source_slug, directories)
+    index = github_client.fetch_package_type_index(source_slug, directories, settings)
+    total = sum(len(v) for v in index.values())
+    activity.logger.info("Type index: %d declarations across %d directories", total, len(index))
+    return index
+
+
+@activity.defn
 async def generate_code_for_bundle(
     bundle: RepoPRBundle,
     feature_description: str,
@@ -521,7 +537,26 @@ async def push_ci_workflow(staging_repo: StagingRepo, tests: list[CITest]) -> No
             github_client.delete_file(fork_slug, branch, f".github/workflows/{name}", settings)
             activity.logger.info("Removed upstream workflow: .github/workflows/%s", name)
 
-    workflow_yaml = ci_workflow_generator.generate_ci_workflow(tests, settings.go_builder_image)
+    repo_files = github_client.list_directory(fork_slug, branch, ".", settings)
+
+    go_mod = None
+    try:
+        go_mod = github_client.get_file_content(fork_slug, "go.mod", branch, settings)
+    except Exception:
+        pass
+    go_image = ci_workflow_generator.detect_go_image(go_mod, settings.go_builder_image)
+    activity.logger.info("Using Go image %s for %s", go_image, fork_slug)
+
+    lint_config = None
+    for name in ci_workflow_generator._GOLANGCI_CONFIGS:
+        if repo_files and name in repo_files:
+            try:
+                lint_config = github_client.get_file_content(fork_slug, name, branch, settings)
+            except Exception:
+                pass
+            break
+
+    workflow_yaml = ci_workflow_generator.generate_ci_workflow(tests, go_image, repo_files, lint_config)
     github_client.push_file_change(
         fork_slug, branch, ".gitea/workflows/ci.yml", workflow_yaml,
         "ci: add Gitea Actions CI workflow", settings,
