@@ -39,6 +39,7 @@ Or run them individually:
 ```bash
 make gitea-setup        # create admin user, API token, staging org
 make gitea-seed-repos   # create staging repositories
+make gitea-reviewer     # create reviewer user (login: reviewer / reviewer123)
 make jira-seed          # import test data into Jira simulator
 ```
 
@@ -63,7 +64,8 @@ Once the stack is running:
 | Temporal UI | http://localhost:8233 | -- |
 | RustFS Console | http://localhost:9001 | rustfsadmin / rustfsadmin |
 | Ollama API | http://localhost:11434 | -- |
-| Gitea | http://localhost:3000 | gitea / gitea123 |
+| Gitea (admin) | http://localhost:3000 | gitea / gitea123 |
+| Gitea (reviewer) | http://localhost:3000 | reviewer / reviewer123 |
 | Jira Simulator | http://localhost:8080 | -- |
 
 ## Seed Test Data (Optional)

@@ -460,12 +460,7 @@ Or run them individually:
 ```bash
 make gitea-setup        # create admin user, API token, and staging org
 make gitea-seed-repos   # create source repos the workflows fork/PR against
-```
-
-Optionally create a `reviewer` user for manual PR reviews:
-
-```bash
-make gitea-reviewer     # login: reviewer / reviewer123
+make gitea-reviewer     # create reviewer user (login: reviewer / reviewer123)
 ```
 
 The token is saved inside the Gitea data volume:

@@ -12,15 +12,12 @@ one-time setup:
 ```bash
 make gitea-setup        # create admin user, API token, and staging org
 make gitea-seed-repos   # create orgs and staging repositories
+make gitea-reviewer     # create reviewer user (login: reviewer / reviewer123)
 ```
 
-### Create a reviewer user (optional)
-
-```bash
-make gitea-reviewer     # creates user: reviewer / reviewer123
-```
-
-This user can be used for manual PR reviews in the Gitea UI.
+The `reviewer` user is added to the `openshift-splat-team/Owners` team and
+can be used for manual PR reviews in the Gitea UI (e.g. during the
+enhancement approval loop).
 
 ## Configuration
 
